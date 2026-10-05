@@ -8,3 +8,54 @@ ok   test_modes_split_curtain_walls
 ok   test_summary
 ok   test_value_resolves_scope
 8 tests passed
+
+
+in revit test 1:
+
+Records check: Walls
+
+•Walls: 273 elements, 20 types (14 layered), 35 curtain-wall elements, 162 fields in catalogue.
+
+•Fields: Type Mark [type/text], Wall Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Base Constraint [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Type Image [type/elementid], Keynote [type/text], Category [type/elementid], Category [type/elementid], Type IFC Predefined Type [type/text], Export Type to IFC As [type/text], Export Type to IFC [type/text], Type IfcGUID [type/text], Adjust for Mullion Size [type/yesno], Adjust for Mullion Size [type/yesno], Spacing [type/length], Spacing [type/length], Layout [type/text], Layout [type/text], Design Option [type/elementid], Model [type/text], Manufacturer [type/text], Type Comments [type/text], URL [type/text], Description [type/text], Join Condition [type/text], Border 2 Type [type/elementid], Border 1 Type [type/elementid], Border 2 Type [type/elementid], Border 1 Type [type/elementid]
+
+
+standard: 97 v1 rows checked, 0 mismatches, 238 elements in records for this mode.
+
+•34 layer rows differ only because v1 counts a material once per layer (material used in 2+ layers). Records hold the true value.
+
+
+curtain walls: 6 v1 rows checked, 0 mismatches, 35 elements in records for this mode.
+
+•on-demand 'Type Image' (type): first values [None, None, None]
+
+•on-demand 'Keynote' (type): first values [None, None, None]
+
+•on-demand 'Category' (type): first values [None, None, None]
+
+in revit test 2:
+
+Records check: Rooms
+
+•Rooms: 0 elements, 0 types (0 layered), 0 curtain-wall elements, 15 fields in catalogue.
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer]
+
+
+standard: 0 v1 rows checked, 0 mismatches, 0 elements in records for this mode.
+
+in revit test 3:
+
+Records check: Floors
+
+•Floors: 17 elements, 12 types (12 layered), 0 curtain-wall elements, 126 fields in catalogue.
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Type Image [type/elementid], Keynote [type/text], Category [type/elementid], Category [type/elementid], Type IFC Predefined Type [type/text], Export Type to IFC As [type/text], Export Type to IFC [type/text], Type IfcGUID [type/text], Design Option [type/elementid], Model [type/text], Manufacturer [type/text], Type Comments [type/text], URL [type/text], Description [type/text], Structural Material [type/elementid], Roughness [type/integer], Absorptance [type/number], Thermal Mass [type/number], Thermal Resistance (R) [type/number], Heat Transfer Coefficient (U) [type/number], Assembly Description [type/text], Assembly Code [type/text], Coarse Scale Fill Color [type/integer], Coarse Scale Fill Pattern [type/elementid], Edited by [type/text]
+
+
+standard: 51 v1 rows checked, 0 mismatches, 17 elements in records for this mode.
+
+•on-demand 'Type Image' (type): first values [None, None, None]
+
+•on-demand 'Keynote' (type): first values [None, None, None]
+
+•on-demand 'Category' (type): first values [None, None, None]
