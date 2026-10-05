@@ -6,6 +6,7 @@
 # "Re-read model" does what the old "Preview table" button did.
 
 import re
+import traceback
 import clr
 clr.AddReference("PresentationFramework")
 clr.AddReference("PresentationCore")
@@ -80,6 +81,7 @@ class AbacoWindow(forms.WPFWindow):
         self._cats = []
         self._titleblocks = []
         self._todo_seen = set()
+        self._records = None
         self._fill_categories()
         self._fill_titleblocks()
 
@@ -264,15 +266,28 @@ class AbacoWindow(forms.WPFWindow):
             forms.alert(str(ex), title="Abaco Tables", warn_icon=True)
             return
         self._busy(True, "Reading model…")
+        self._records_check(s["cat"])
         try:
             elements, table = self._build(s)
             self._show_preview(table)
             self.tabs.SelectedIndex = 1
             self._log(u"Preview: %d elements -> %d table rows." % (len(elements), len(table)))
         except Exception as ex:
-            self._log(u"ERROR: %s" % ex)
+            self._log(u"ERROR: %s\n%s" % (ex, traceback.format_exc()))
         finally:
             self._busy(False)
+
+    def _records_check(self, cat):
+        """Phase 1 check: read the category into records and log what came out (runs before the v1 build)."""
+        try:
+            from abaco import revit_reader          # imported here so a reader bug cannot stop the window opening
+            rs = revit_reader.read_records(doc, cat)
+        except Exception as ex:
+            self._log(u"Records: FAILED. %s\n%s" % (ex, traceback.format_exc()))
+            return
+        self._records = rs
+        for line in rs.summary_lines():
+            self._log(u"Records: %s" % line)
 
     def _read_settings_for_preview(self):
         """Preview only needs category + title; do not demand valid output settings."""
@@ -307,7 +322,7 @@ class AbacoWindow(forms.WPFWindow):
                 self._run_excel(s, table)
             self._log(u"Done.")
         except Exception as ex:
-            self._log(u"ERROR: %s" % ex)
+            self._log(u"ERROR: %s\n%s" % (ex, traceback.format_exc()))
         finally:
             self._busy(False)
 
@@ -321,7 +336,7 @@ class AbacoWindow(forms.WPFWindow):
             t.Commit()
         except Exception as ex:
             t.RollBack()
-            self._log(u"Revit: FAILED, nothing was changed. %s" % ex)
+            self._log(u"Revit: FAILED, nothing was changed. %s\n%s" % (ex, traceback.format_exc()))
             return
         for line in report:
             self._log(u"Revit: %s" % line)
@@ -330,7 +345,7 @@ class AbacoWindow(forms.WPFWindow):
         try:
             self._log(u"Excel: %s" % write_table(s["path"], s["name"], table))
         except Exception as ex:
-            self._log(u"Excel: FAILED. %s" % ex)
+            self._log(u"Excel: FAILED. %s\n%s" % (ex, traceback.format_exc()))
 
     # ------------------------------------------------------------------ events: Phase 4 stubs
     def fields_reset_click(self, sender, args):

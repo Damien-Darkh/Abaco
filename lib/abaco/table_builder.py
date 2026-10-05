@@ -106,6 +106,9 @@ def _type_name(typ):
 def _fam_name(typ):
     return getattr(typ, "FamilyName", "") or ""
 
+def _lc(v):
+    """Lower-case text key for sorting; tolerates a number or None in a cell."""
+    return u"" if v is None else (u"%s" % v).lower()
 
 def build_table(doc, elements, title_in, curtain_mode):
     """elements: Revit elements (instances). curtain_mode True = curtain walls only,
@@ -175,8 +178,8 @@ def build_table(doc, elements, title_in, curtain_mode):
             rows.append([_type_mark(typ), _type_name(typ), g["count"], round(g["length"], 2), num(g["h"]),
                          round(g["area"], 2) if g["has_area"] else u"", g["level"]])
 
-        def sort_key(r):
-            return (r[6].lower(), r[0].lower(), r[1].lower(), r[4] if r[4] != u"" else -1)
+        def sort_key(r):                      # curtain walls
+            return (_lc(r[6]), _lc(r[0]), _lc(r[1]), r[4] if r[4] != u"" else -1)
 
     elif any(_compound(g["type"]) is not None for g in groups.values()):
         headers = [u"Type Mark", u"Wall Type Name" if all_walls else u"Type Name", u"Order", u"Material",
@@ -205,8 +208,8 @@ def build_table(doc, elements, title_in, curtain_mode):
                         round(g["area"], 2) if g["has_area"] else u"",
                         g["level"]])
 
-        def sort_key(r):
-            return (r[7].lower(), r[0].lower(), r[1].lower(), r[2] if isinstance(r[2], int) else 0)
+        def sort_key(r):                      # layered types
+            return (_lc(r[7]), _lc(r[0]), _lc(r[1]), r[2] if isinstance(r[2], int) else 0)
 
     else:
         headers = [u"Type Mark", u"Family", u"Type Name", u"Width (m)", u"Height (m)", u"Count", level_header]
@@ -216,8 +219,8 @@ def build_table(doc, elements, title_in, curtain_mode):
             rows.append([_type_mark(typ), _fam_name(typ), _type_name(typ), num(g["w"]), num(g["h"]),
                          g["count"], g["level"]])
 
-        def sort_key(r):
-            return (r[6].lower(), r[0].lower(), r[1].lower(), r[2].lower(),
+        def sort_key(r):                      # everything else
+            return (_lc(r[6]), _lc(r[0]), _lc(r[1]), _lc(r[2]),
                     r[3] if r[3] != u"" else -1, r[4] if r[4] != u"" else -1)
 
     LV = len(headers) - 1            # last column = base constraint / level
