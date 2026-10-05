@@ -1,0 +1,4 @@
+title: "Abaco\nTables"
+tooltip: "Builds the Abaco quantity tables (walls, curtain walls, floors, roofs, ceilings, doors, windows...) and draws them as drafting views on sheets and/or writes them to Excel."
+author: "Abaco"
+min_revit_version: 2024

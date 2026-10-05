@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-__title__ = "Abaco\nTables"
-__doc__ = ("Builds the Abaco quantity tables (walls, curtain walls, floors, roofs, ceilings, doors, windows...) "
-           "and draws them as drafting views on sheets and/or writes them to Excel.")
+# Title and tooltip now live in bundle.yaml.
+#
+# PHASE 0 VERSION: v1 behaviour on top of the newer (Phase 4) ui.xaml.
+# The Fields / Sorting / Formatting handlers are stubs that log once ("not implemented yet").
+# "Re-read model" does what the old "Preview table" button did.
 
 import re
 import clr
@@ -10,6 +12,7 @@ clr.AddReference("PresentationCore")
 clr.AddReference("WindowsBase")
 from System import Action
 from System.Collections.Generic import List
+from System.Windows import Visibility
 from System.Windows.Controls import DataGridTextColumn
 from System.Windows.Data import Binding
 from System.Windows.Input import Cursors
@@ -35,7 +38,7 @@ PRESETS = {
     True:  dict(path=_XL_DIR + "\\Abaco Curtain Walls.xlsx",
                 name="Abaco Curtain Walls", title="Abaco Curtain Walls", prefix="AC"),
 }
-DEFAULT_HIDDEN = "Wall Type Name;Order;Function"
+DEFAULT_HIDDEN = "Wall Type Name;Order;Function"     # v1: fixed here until the Formatting tab is wired
 DEFAULT_TEXT_MM = "2.5"
 DEFAULT_PAGE_H_MM = "490"
 
@@ -76,10 +79,10 @@ class AbacoWindow(forms.WPFWindow):
         forms.WPFWindow.__init__(self, script.get_bundle_file("ui.xaml"))
         self._cats = []
         self._titleblocks = []
+        self._todo_seen = set()
         self._fill_categories()
         self._fill_titleblocks()
 
-        self.tb_hidden.Text = DEFAULT_HIDDEN
         self.tb_text_mm.Text = DEFAULT_TEXT_MM
         self.tb_page_h.Text = DEFAULT_PAGE_H_MM
         self.tb_path.Text = PRESETS[False]["path"]
@@ -149,10 +152,16 @@ class AbacoWindow(forms.WPFWindow):
         self.Dispatcher.Invoke(Action(lambda: None), DispatcherPriority.Render)
 
     def _busy(self, on, text=None):
-        self.btn_run.IsEnabled = self.btn_preview.IsEnabled = not on
+        self.btn_run.IsEnabled = not on
         self.Cursor = Cursors.Wait if on else None
         self.status_text.Text = text or ("Working…" if on else "Ready")
         self._pump()
+
+    def _todo(self, name):
+        """Placeholder for handlers that belong to Phase 4: log once, do nothing."""
+        if self._ready and name not in self._todo_seen:
+            self._todo_seen.add(name)
+            self._log(u"(not implemented yet: %s)" % name)
 
     def _read_settings(self):
         sel = self._selected()
@@ -161,7 +170,7 @@ class AbacoWindow(forms.WPFWindow):
         s = dict(cat=sel[2], cat_name=sel[0], curtain=self._curtain_selected())
         s["title"] = self.tb_title.Text.strip()
         s["name"] = self.tb_name.Text.strip()
-        s["hidden"] = self.tb_hidden.Text
+        s["hidden"] = DEFAULT_HIDDEN
         s["do_revit"] = bool(self.chk_revit.IsChecked)
         s["do_excel"] = bool(self.chk_excel.IsChecked)
         s["prefix"] = self.tb_prefix.Text.strip()
@@ -212,10 +221,10 @@ class AbacoWindow(forms.WPFWindow):
                 row.Add(u"" if v is None else u"%s" % v)
             rows.Add(row)
         grid.ItemsSource = rows
-        self.preview_note.Text = u"%d rows x %d columns (title and header included, blank rows separate type blocks)." % (
+        self.preview_status.Text = u"%d rows x %d columns (title and header included, blank rows separate type blocks)." % (
             len(table), ncols)
 
-    # ------------------------------------------------------------------ events
+    # ------------------------------------------------------------------ events: working in v1
     def category_changed(self, sender, args):
         if self._ready:
             self._refresh_category(set_path=self._walls_selected())
@@ -237,7 +246,18 @@ class AbacoWindow(forms.WPFWindow):
     def close_click(self, sender, args):
         self.Close()
 
-    def preview_click(self, sender, args):
+    def view_changed(self, sender, args):
+        """As Excel / As Revit toggle (Revit canvas is drawn in Phase 4; for now it is an empty page)."""
+        if not self._ready:
+            return
+        revit_on = bool(self.view_revit.IsChecked)
+        self.excel_host.Visibility = Visibility.Collapsed if revit_on else Visibility.Visible
+        self.revit_host.Visibility = Visibility.Visible if revit_on else Visibility.Collapsed
+        if revit_on:
+            self._todo("As Revit preview")
+
+    def reread_click(self, sender, args):
+        """Same as the old 'Preview table' button: read the model, show the table."""
         try:
             s = self._read_settings_for_preview()
         except ValueError as ex:
@@ -311,6 +331,49 @@ class AbacoWindow(forms.WPFWindow):
             self._log(u"Excel: %s" % write_table(s["path"], s["name"], table))
         except Exception as ex:
             self._log(u"Excel: FAILED. %s" % ex)
+
+    # ------------------------------------------------------------------ events: Phase 4 stubs
+    def fields_reset_click(self, sender, args):
+        self._todo("Fields > Reset")
+
+    def param_search_changed(self, sender, args):
+        self._todo("Fields > parameter search")
+
+    def sort_add_click(self, sender, args):
+        self._todo("Sorting > Add level")
+
+    def sort_clear_click(self, sender, args):
+        self._todo("Sorting > Clear")
+
+    def options_changed(self, sender, args):
+        self._todo("Grand totals / Itemize")
+
+    def format_selection_changed(self, sender, args):
+        self._todo("Formatting > field selection")
+
+    def fmt_heading_changed(self, sender, args):
+        self._todo("Formatting > heading")
+
+    def orient_click(self, sender, args):
+        self._todo("Formatting > orientation")
+
+    def align_click(self, sender, args):
+        self._todo("Formatting > alignment")
+
+    def fmt_width_changed(self, sender, args):
+        self._todo("Formatting > width")
+
+    def fmt_auto_click(self, sender, args):
+        self._todo("Formatting > auto width")
+
+    def fmt_calc_changed(self, sender, args):
+        self._todo("Formatting > calculation")
+
+    def fmt_flag_click(self, sender, args):
+        self._todo("Formatting > hidden / Excel flags")
+
+    def preview_loading_row(self, sender, args):
+        pass        # Phase 4: bold total rows, shrink blank spacer rows
 
 
 if __name__ == "__main__":
