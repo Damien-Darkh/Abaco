@@ -1,0 +1,10 @@
+> python3 tests/test_records.py
+ok   test_add_field_ignores_duplicates
+ok   test_core_labels_match_v1
+ok   test_display_labels_tag_clashes
+ok   test_field_roundtrip_and_validation
+ok   test_material_ids_distinct_in_order
+ok   test_modes_split_curtain_walls
+ok   test_summary
+ok   test_value_resolves_scope
+8 tests passed

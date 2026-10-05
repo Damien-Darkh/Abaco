@@ -1,397 +1,154 @@
 # -*- coding: utf-8 -*-
-# Title and tooltip now live in bundle.yaml.
-#
-# PHASE 0 VERSION: v1 behaviour on top of the newer (Phase 4) ui.xaml.
-# The Fields / Sorting / Formatting handlers are stubs that log once ("not implemented yet").
-# "Re-read model" does what the old "Preview table" button did.
+"""Phase 1 check (temporary dev button): read the records and compare them with the v1 table builder.
 
-import re
-import traceback
-import clr
-clr.AddReference("PresentationFramework")
-clr.AddReference("PresentationCore")
-clr.AddReference("WindowsBase")
-from System import Action
-from System.Collections.Generic import List
-from System.Windows import Visibility
-from System.Windows.Controls import DataGridTextColumn
-from System.Windows.Data import Binding
-from System.Windows.Input import Cursors
-from System.Windows.Threading import DispatcherPriority
-from Microsoft.Win32 import SaveFileDialog
+Compares, for the picked category (walls: standard and curtain mode):
+  layered tables  : thickness, material and material area of every layer row
+  curtain tables  : count, total length, area of every row
+  simple tables   : count of every row
+Delete this button when Phase 2 replaces table_builder.
+"""
+from pyrevit import forms, script, revit
 
-from pyrevit import DB, forms, script, revit
-
-from abaco.table_builder import build_table, eid_val
-from abaco.layout import build_layout
-from abaco import drafting
-from abaco.excel_writer import write_table, col_letter
+from abaco import revit_reader as rr
+from abaco.table_builder import build_table
+from abaco.records import (K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA)
 
 doc = revit.doc
 
-# ----------------------------------------------------------------------------------------------
-# Defaults (values that were hard-wired in the Dynamo graph). Edit here for another project.
-# ----------------------------------------------------------------------------------------------
-_XL_DIR = r"\\192.168.1.52\001 - lavori correnti\026 BASTIA UMBRA PALAZZETTO\excel"
-PRESETS = {
-    False: dict(path=_XL_DIR + "\\Abaco Murature.xlsx",
-                name="Abaco Murature", title="Abaco Muratura", prefix="AM"),
-    True:  dict(path=_XL_DIR + "\\Abaco Curtain Walls.xlsx",
-                name="Abaco Curtain Walls", title="Abaco Curtain Walls", prefix="AC"),
-}
-DEFAULT_HIDDEN = "Wall Type Name;Order;Function"     # v1: fixed here until the Formatting tab is wired
-DEFAULT_TEXT_MM = "2.5"
-DEFAULT_PAGE_H_MM = "490"
 
-_BAD_VIEW_CHARS = re.compile(r"[\\:{}\[\]|;<>?`~]")      # not allowed in Revit view names
-_BAD_TAB_CHARS = re.compile(r"[\\/:*?\[\]]")             # not allowed in Excel tab names
+def _t(v):
+    return u"" if v is None else v
 
 
-def _elements_filter(cat):
-    return (DB.FilteredElementCollector(doc)
-            .WherePasses(DB.ElementCategoryFilter(cat.Id))
-            .WhereElementIsNotElementType())
+def _r3(v):
+    return None if v is None else round(v, 3)
 
 
-def list_model_categories():
-    """Model categories that actually have elements in this project: [(name, count, Category)]."""
-    items = []
-    for cat in doc.Settings.Categories:
-        try:
-            if cat.CategoryType != DB.CategoryType.Model:
-                continue
-            n = _elements_filter(cat).GetElementCount()
-        except Exception:
-            continue
-        if n:
-            items.append((cat.Name, n, cat))
-    items.sort(key=lambda t: t[0].lower())
-    return items
+def _num(v):
+    return None if v == u"" or v is None else float(v)
 
 
-def is_walls(cat):
-    return eid_val(cat.Id) == int(DB.BuiltInCategory.OST_Walls)
+def _same(a, b):
+    a, b = _num(a), _num(b)
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) < 0.0051 if False else abs(a - b) < 1e-6
 
 
-class AbacoWindow(forms.WPFWindow):
-    _ready = False          # XAML fires Checked/SelectionChanged while loading; ignore until set up
-
-    def __init__(self):
-        forms.WPFWindow.__init__(self, script.get_bundle_file("ui.xaml"))
-        self._cats = []
-        self._titleblocks = []
-        self._todo_seen = set()
-        self._records = None
-        self._fill_categories()
-        self._fill_titleblocks()
-
-        self.tb_text_mm.Text = DEFAULT_TEXT_MM
-        self.tb_page_h.Text = DEFAULT_PAGE_H_MM
-        self.tb_path.Text = PRESETS[False]["path"]
-        self._ready = True
-        self._refresh_category(set_path=True)
-
-    # ------------------------------------------------------------------ setup
-    def _fill_categories(self):
-        self._cats = list_model_categories()
-        pick = 0
-        for i, (name, count, cat) in enumerate(self._cats):
-            self.category_combo.Items.Add(u"%s  (%d)" % (name, count))
-            if is_walls(cat):
-                pick = i
-        if self._cats:
-            self.category_combo.SelectedIndex = pick
-
-    def _fill_titleblocks(self):
-        coll = (DB.FilteredElementCollector(doc)
-                .OfCategory(DB.BuiltInCategory.OST_TitleBlocks).WhereElementIsElementType())
-        for fs in coll:      # collector order: first one is the default (same as the Dynamo graph)
-            nm = fs.get_Parameter(DB.BuiltInParameter.SYMBOL_NAME_PARAM).AsString()
-            self.cmb_titleblock.Items.Add(u"%s : %s" % (fs.FamilyName, nm))
-            self._titleblocks.append(fs)
-        self.cmb_titleblock.Items.Add(u"<No title block>")
-        self._titleblocks.append(None)
-        self.cmb_titleblock.SelectedIndex = 0
-
-    # ------------------------------------------------------------------ helpers
-    def _selected(self):
-        i = self.category_combo.SelectedIndex
-        return self._cats[i] if 0 <= i < len(self._cats) else None
-
-    def _walls_selected(self):
-        sel = self._selected()
-        return bool(sel) and is_walls(sel[2])
-
-    def _curtain_selected(self):
-        return self._walls_selected() and bool(self.mode_curtain.IsChecked)
-
-    def _refresh_category(self, set_path):
-        """Category / wall-mode changed: fill the fields the Dynamo graph picked with its switch nodes."""
-        sel = self._selected()
-        if not sel:
-            return
-        name, count, cat = sel
-        self.category_info.Text = u"%d elements in the model" % count
-        self.wall_mode_panel.IsEnabled = is_walls(cat)
-        if is_walls(cat):
-            p = PRESETS[self._curtain_selected()]
-            if set_path:
-                self.tb_path.Text = p["path"]
-            self.tb_name.Text, self.tb_title.Text, self.tb_prefix.Text = p["name"], p["title"], p["prefix"]
+def _bucket(rs, curtain, shape):
+    """Group the records the way v1 groups elements for this table shape."""
+    d = {}
+    for el in rs.elements_in_mode(curtain):
+        tr = rs.type_of(el)
+        mark, name, fam, lvl = _t(tr.get(K_TYPE_MARK)), _t(tr.get(K_TYPE_NAME)), _t(tr.get(K_FAMILY)), _t(el.get(K_LEVEL))
+        if shape == "layered":
+            key = (mark, name, lvl)
+        elif shape == "curtain":
+            key = (mark, name, lvl, _r3(el.get(K_HEIGHT)))
         else:
-            # other categories: own tab in the same workbook, title blank = "Abaco <Category>"
-            self.tb_name.Text = u"Abaco %s" % name
-            self.tb_title.Text = u""
-            self.tb_prefix.Text = u"A" + name[:1].upper()
+            key = (mark, fam, name, lvl, _r3(el.get(K_WIDTH)), _r3(el.get(K_HEIGHT)))
+        d.setdefault(key, []).append(el)
+    return d
 
-    def _log(self, msg):
-        self.log_box.AppendText(u"%s\n" % msg)
-        self.log_box.ScrollToEnd()
-        self._pump()
 
-    def _pump(self):
-        """Let WPF repaint while the (synchronous) work is running."""
-        self.Dispatcher.Invoke(Action(lambda: None), DispatcherPriority.Render)
+def _compare(rs, table, curtain, out):
+    headers = table[1]
+    hi = dict((h, i) for i, h in enumerate(headers))
+    rows = [r for r in table[2:] if any(c != u"" for c in r)]
+    shape = "curtain" if curtain else ("layered" if u"Order" in hi else "simple")
+    buckets = _bucket(rs, curtain, shape)
+    bad, known, checked = [], 0, 0
+    last = len(headers) - 1
+    for r in rows:
+        if shape == "layered":
+            key = (r[0], r[1], r[last])
+        elif shape == "curtain":
+            key = (r[0], r[1], r[last], _r3(_num(r[hi[u"Height (m)"]])))
+        else:
+            key = (r[0], r[1], r[2], r[last], _r3(_num(r[hi[u"Width (m)"]])), _r3(_num(r[hi[u"Height (m)"]])))
+        els = buckets.get(key)
+        if not els:
+            bad.append(u"no records for row %s" % (key,))
+            continue
+        checked += 1
+        if shape == "layered":
+            order = r[hi[u"Order"]]
+            if order == u"":
+                continue                                    # (no layers) row
+            tr = rs.type_of(els[0])
+            lay = tr.layers[order - 1]
+            exp = None
+            if lay.material_id is not None:
+                exp = sum(e.material_areas.get(lay.material_id, 0.0) for e in els)
+            got = _num(r[hi[u"Material Area (m\u00b2)"]])
+            if lay.material != r[hi[u"Material"]] or abs(lay.thickness - r[hi[u"Thickness (m)"]]) > 5e-5:
+                bad.append(u"layer mismatch %s order %s" % (key, order))
+            elif exp is None or got is None:
+                if not (exp is None and got is None):
+                    bad.append(u"area presence %s order %s: v1=%s records=%s" % (key, order, got, exp))
+            elif abs(round(exp, 2) - got) > 1e-6:
+                reps = sum(1 for l in tr.layers if l.material_id == lay.material_id)
+                if reps > 1 and abs(round(exp * reps, 2) - got) < 0.011:
+                    known += 1                              # v1 adds the same material once per layer
+                else:
+                    bad.append(u"area %s order %s: v1=%s records=%s" % (key, order, got, round(exp, 2)))
+        elif shape == "curtain":
+            cnt = len(els)
+            length = round(sum(e.get(K_LENGTH) or 0.0 for e in els), 2)
+            areas = [e.get(K_AREA) for e in els if e.get(K_AREA) is not None]
+            area = round(sum(areas), 2) if areas else None
+            if cnt != r[hi[u"Count"]] or not _same(length, r[hi[u"Total Length (m)"]]) \
+                    or not _same(area, r[hi[u"Area (m\u00b2)"]]):
+                bad.append(u"%s: v1 count/len/area=%s/%s/%s records=%s/%s/%s" % (
+                    key, r[hi[u"Count"]], r[hi[u"Total Length (m)"]], r[hi[u"Area (m\u00b2)"]], cnt, length, area))
+        else:
+            if len(els) != r[hi[u"Count"]]:
+                bad.append(u"%s: v1 count=%s records=%s" % (key, r[hi[u"Count"]], len(els)))
+    n_rec = len(rs.elements_in_mode(curtain))
+    out.print_md(u"**%s**: %d v1 rows checked, %d mismatches, %d elements in records for this mode." % (
+        u"curtain walls" if curtain else u"standard", checked, len(bad), n_rec))
+    if known:
+        out.print_md(u"- %d layer rows differ only because v1 counts a material once per layer "
+                     u"(material used in 2+ layers). Records hold the true value." % known)
+    for b in bad[:25]:
+        out.print_md(u"- MISMATCH: %s" % b)
+    if len(bad) > 25:
+        out.print_md(u"- ... and %d more" % (len(bad) - 25))
 
-    def _busy(self, on, text=None):
-        self.btn_run.IsEnabled = not on
-        self.Cursor = Cursors.Wait if on else None
-        self.status_text.Text = text or ("Working…" if on else "Ready")
-        self._pump()
 
-    def _todo(self, name):
-        """Placeholder for handlers that belong to Phase 4: log once, do nothing."""
-        if self._ready and name not in self._todo_seen:
-            self._todo_seen.add(name)
-            self._log(u"(not implemented yet: %s)" % name)
+def main():
+    out = script.get_output()
+    cats = rr.list_model_categories(doc)
+    labels = [u"%s  (%d)" % (n, c) for n, c, _ in cats]
+    pick = forms.SelectFromList.show(labels, title="Records check: pick a category", multiselect=False)
+    if not pick:
+        return
+    name, count, cat = cats[labels.index(pick)]
+    out.print_md(u"## Records check: %s" % name)
 
-    def _read_settings(self):
-        sel = self._selected()
-        if not sel:
-            raise ValueError("Pick a category.")
-        s = dict(cat=sel[2], cat_name=sel[0], curtain=self._curtain_selected())
-        s["title"] = self.tb_title.Text.strip()
-        s["name"] = self.tb_name.Text.strip()
-        s["hidden"] = DEFAULT_HIDDEN
-        s["do_revit"] = bool(self.chk_revit.IsChecked)
-        s["do_excel"] = bool(self.chk_excel.IsChecked)
-        s["prefix"] = self.tb_prefix.Text.strip()
-        s["path"] = self.tb_path.Text.strip().strip('"')
-        s["title_block"] = self._titleblocks[max(self.cmb_titleblock.SelectedIndex, 0)]
-        for key, box, label in (("text_mm", self.tb_text_mm, "Text height"),
-                                ("page_h_mm", self.tb_page_h, "Max table height")):
-            try:
-                s[key] = float(box.Text.strip().replace(",", "."))      # accepts 2,5 as well as 2.5
-            except ValueError:
-                raise ValueError("%s must be a number." % label)
-            if s[key] <= 0:
-                raise ValueError("%s must be greater than 0." % label)
-        if not s["name"]:
-            raise ValueError("Table name is required.")
-        if _BAD_VIEW_CHARS.search(s["name"]):
-            raise ValueError("Table name contains characters Revit does not allow in view names:  \\ : { } [ ] | ; < > ? ` ~")
-        if s["do_excel"]:
-            if _BAD_TAB_CHARS.search(s["name"]) or len(s["name"]) > 31:
-                raise ValueError("Table name is also the Excel tab name: max 31 characters, none of  \\ / : * ? [ ]")
-            if not s["path"].lower().endswith(".xlsx"):
-                raise ValueError("The Excel workbook path must end with .xlsx")
-        if s["do_revit"] and not s["prefix"]:
-            raise ValueError("Sheet number prefix is required.")
-        if not (s["do_revit"] or s["do_excel"]):
-            raise ValueError("Tick at least one output (Revit or Excel).")
-        return s
+    rs = rr.read_category(doc, cat, log=lambda m: None)
+    for line in rs.summary_lines():
+        out.print_md(u"- %s" % line)
+    out.print_md(u"- Fields: %s" % u", ".join(u"%s [%s/%s]" % (f.label, f.scope, f.kind) for f in rs.fields[:40]))
 
-    def _build(self, s):
-        elements = list(_elements_filter(s["cat"]).ToElements())
-        table = build_table(doc, elements, s["title"], s["curtain"])
-        return elements, table
+    is_walls = rr.eid_val(cat.Id) == int(rr.DB.BuiltInCategory.OST_Walls)
+    elements = list(rr.elements_filter(doc, cat).ToElements())
+    for curtain in ([False, True] if is_walls else [False]):
+        table = build_table(doc, elements, u"", curtain)
+        _compare(rs, table, curtain, out)
 
-    def _show_preview(self, table):
-        grid = self.preview_grid
-        grid.Columns.Clear()
-        ncols = max(len(r) for r in table)
-        for i in range(ncols):
-            col = DataGridTextColumn()
-            col.Header = col_letter(i + 1)
-            col.Binding = Binding("[%d]" % i)
-            grid.Columns.Add(col)
-        rows = List[object]()
-        for r in table:
-            row = List[object]()
-            for i in range(ncols):
-                v = r[i] if i < len(r) else u""
-                row.Add(u"" if v is None else u"%s" % v)
-            rows.Add(row)
-        grid.ItemsSource = rows
-        self.preview_status.Text = u"%d rows x %d columns (title and header included, blank rows separate type blocks)." % (
-            len(table), ncols)
-
-    # ------------------------------------------------------------------ events: working in v1
-    def category_changed(self, sender, args):
-        if self._ready:
-            self._refresh_category(set_path=self._walls_selected())
-
-    def mode_changed(self, sender, args):
-        if self._ready:
-            self._refresh_category(set_path=True)
-
-    def browse_click(self, sender, args):
-        dlg = SaveFileDialog()
-        dlg.Title = "Excel workbook"
-        dlg.Filter = "Excel workbook (*.xlsx)|*.xlsx"
-        dlg.OverwritePrompt = False         # we write into the workbook, we do not replace it
-        dlg.CheckFileExists = False
-        dlg.FileName = self.tb_path.Text
-        if dlg.ShowDialog():
-            self.tb_path.Text = dlg.FileName
-
-    def close_click(self, sender, args):
-        self.Close()
-
-    def view_changed(self, sender, args):
-        """As Excel / As Revit toggle (Revit canvas is drawn in Phase 4; for now it is an empty page)."""
-        if not self._ready:
-            return
-        revit_on = bool(self.view_revit.IsChecked)
-        self.excel_host.Visibility = Visibility.Collapsed if revit_on else Visibility.Visible
-        self.revit_host.Visibility = Visibility.Visible if revit_on else Visibility.Collapsed
-        if revit_on:
-            self._todo("As Revit preview")
-
-    def reread_click(self, sender, args):
-        """Same as the old 'Preview table' button: read the model, show the table."""
-        try:
-            s = self._read_settings_for_preview()
-        except ValueError as ex:
-            forms.alert(str(ex), title="Abaco Tables", warn_icon=True)
-            return
-        self._busy(True, "Reading model…")
-        self._records_check(s["cat"])
-        try:
-            elements, table = self._build(s)
-            self._show_preview(table)
-            self.tabs.SelectedIndex = 1
-            self._log(u"Preview: %d elements -> %d table rows." % (len(elements), len(table)))
-        except Exception as ex:
-            self._log(u"ERROR: %s\n%s" % (ex, traceback.format_exc()))
-        finally:
-            self._busy(False)
-
-    def _records_check(self, cat):
-        """Phase 1 check: read the category into records and log what came out (runs before the v1 build)."""
-        try:
-            from abaco import revit_reader          # imported here so a reader bug cannot stop the window opening
-            rs = revit_reader.read_records(doc, cat)
-        except Exception as ex:
-            self._log(u"Records: FAILED. %s\n%s" % (ex, traceback.format_exc()))
-            return
-        self._records = rs
-        for line in rs.summary_lines():
-            self._log(u"Records: %s" % line)
-
-    def _read_settings_for_preview(self):
-        """Preview only needs category + title; do not demand valid output settings."""
-        sel = self._selected()
-        if not sel:
-            raise ValueError("Pick a category.")
-        return dict(cat=sel[2], title=self.tb_title.Text.strip(), curtain=self._curtain_selected())
-
-    def run_click(self, sender, args):
-        try:
-            s = self._read_settings()
-        except ValueError as ex:
-            forms.alert(str(ex), title="Abaco Tables", warn_icon=True)
-            return
-
-        self._busy(True, "Reading model…")
-        try:
-            elements, table = self._build(s)
-            self._show_preview(table)
-            n_data = sum(1 for r in table[2:] if any(c != u"" for c in r))
-            self._log(u"--- %s | %s ---" % (s["cat_name"], "curtain walls" if s["curtain"] else "standard"))
-            self._log(u"Collected %d elements -> %d table rows." % (len(elements), n_data))
-            if n_data == 0:
-                self._log(u"Nothing to export for this selection (check the category / wall type).")
-                return
-
-            if s["do_revit"]:
-                self._busy(True, "Drawing tables in Revit…")
-                self._run_revit(s, table)
-            if s["do_excel"]:
-                self._busy(True, "Writing Excel…")
-                self._run_excel(s, table)
-            self._log(u"Done.")
-        except Exception as ex:
-            self._log(u"ERROR: %s\n%s" % (ex, traceback.format_exc()))
-        finally:
-            self._busy(False)
-
-    def _run_revit(self, s, table):
-        t = DB.Transaction(doc, u"Abaco tables: %s" % s["name"])
-        t.Start()
-        try:
-            layout = build_layout(table, s["text_mm"], s["page_h_mm"], s["hidden"])
-            report = layout.report + drafting.build_tables(
-                doc, layout, s["name"], s["prefix"], s["text_mm"], s["title_block"])
-            t.Commit()
-        except Exception as ex:
-            t.RollBack()
-            self._log(u"Revit: FAILED, nothing was changed. %s\n%s" % (ex, traceback.format_exc()))
-            return
-        for line in report:
-            self._log(u"Revit: %s" % line)
-
-    def _run_excel(self, s, table):
-        try:
-            self._log(u"Excel: %s" % write_table(s["path"], s["name"], table))
-        except Exception as ex:
-            self._log(u"Excel: FAILED. %s\n%s" % (ex, traceback.format_exc()))
-
-    # ------------------------------------------------------------------ events: Phase 4 stubs
-    def fields_reset_click(self, sender, args):
-        self._todo("Fields > Reset")
-
-    def param_search_changed(self, sender, args):
-        self._todo("Fields > parameter search")
-
-    def sort_add_click(self, sender, args):
-        self._todo("Sorting > Add level")
-
-    def sort_clear_click(self, sender, args):
-        self._todo("Sorting > Clear")
-
-    def options_changed(self, sender, args):
-        self._todo("Grand totals / Itemize")
-
-    def format_selection_changed(self, sender, args):
-        self._todo("Formatting > field selection")
-
-    def fmt_heading_changed(self, sender, args):
-        self._todo("Formatting > heading")
-
-    def orient_click(self, sender, args):
-        self._todo("Formatting > orientation")
-
-    def align_click(self, sender, args):
-        self._todo("Formatting > alignment")
-
-    def fmt_width_changed(self, sender, args):
-        self._todo("Formatting > width")
-
-    def fmt_auto_click(self, sender, args):
-        self._todo("Formatting > auto width")
-
-    def fmt_calc_changed(self, sender, args):
-        self._todo("Formatting > calculation")
-
-    def fmt_flag_click(self, sender, args):
-        self._todo("Formatting > hidden / Excel flags")
-
-    def preview_loading_row(self, sender, args):
-        pass        # Phase 4: bold total rows, shrink blank spacer rows
+    # on-demand values: first non-core field of each scope
+    extra = [f for f in rs.fields if not f.core][:3]
+    if extra:
+        missing = rr.ensure_values(doc, rs, [f.key for f in extra])
+        for f in extra:
+            sample = [rs.value(e, f.key) for e in rs.elements[:3]]
+            out.print_md(u"- on-demand '%s' (%s): first values %s" % (f.label, f.scope, sample))
+        if missing:
+            out.print_md(u"- could not read: %s" % missing)
 
 
 if __name__ == "__main__":
     if not doc or doc.IsFamilyDocument:
         forms.alert("Open a Revit project first.", exitscript=True)
-    AbacoWindow().ShowDialog()
+    main()
