@@ -180,7 +180,8 @@ def build_table(doc, elements, title_in, curtain_mode):
 
     elif any(_compound(g["type"]) is not None for g in groups.values()):
         headers = [u"Type Mark", u"Wall Type Name" if all_walls else u"Type Name", u"Order", u"Material",
-                   u"Thickness (m)", u"Function", u"Material Area (m\u00b2)", level_header]
+                   u"Thickness (m)", u"Function", u"Material Area (m²)", u"Wall Area (m²)", level_header]
+
         name_cols = [1]
         for g in groups.values():
             typ = g["type"]
@@ -199,7 +200,10 @@ def build_table(doc, elements, title_in, curtain_mode):
                     if v in g["mat"]:
                         mat_area = round(g["mat"][v] * SQFT_TO_SQM, 2)
                 rows.append([mark, name, idx + 1, mat_name, round(layer.Width * FT_TO_M, 4),
-                             u"%s" % layer.Function, mat_area, g["level"]])
+                        u"%s" % layer.Function,
+                        mat_area,
+                        round(g["area"], 2) if g["has_area"] else u"",
+                        g["level"]])
 
         def sort_key(r):
             return (r[7].lower(), r[0].lower(), r[1].lower(), r[2] if isinstance(r[2], int) else 0)

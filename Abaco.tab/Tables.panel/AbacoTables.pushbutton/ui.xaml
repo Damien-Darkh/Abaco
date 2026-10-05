@@ -1,16 +1,60 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Abaco Tables" Width="880" Height="800" MinWidth="760" MinHeight="640"
+        Title="Abaco Tables" Width="1240" Height="880" MinWidth="1100" MinHeight="760"
         WindowStartupLocation="CenterScreen" Background="#F4F5F7"
         FontFamily="Segoe UI" FontSize="12" UseLayoutRounding="True" SnapsToDevicePixels="True"
         ShowInTaskbar="False">
 
+    <!--
+    CODE CONTRACT (for script.py, Phase 4)
+    ======================================
+    No event handlers are declared inside DataTemplates (XamlReader cannot wire them).
+    The script attaches ONE container-level handler per list instead, e.g.
+        fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
+    and reads args.OriginalSource.Tag ("up" / "down" / "remove" / "add") and .DataContext (the row item).
+    List rows must be INotifyPropertyChanged items (pyrevit.forms.reactive) so two-way bindings work.
+    The outer/inner TabControls ('tabs', 'edit_tabs') have no XAML handler: the script subscribes to
+    SelectionChanged and checks args.OriginalSource (the event bubbles up from child ComboBoxes).
+    Radio/combo events fire while the XAML loads: guard every handler with a ready flag.
+
+    Row item properties
+      fields_list   : Include (bool, 2-way), Label, HasScope (bool), ScopeText
+      suggest_list  : Label, ScopeText                      (Button Tag="add")
+      sort_list     : Index, Columns (list), Column (2-way), Descending (2-way), GapRow (2-way)
+                                                            (Button Tag="remove")
+      format_list   : Label, AlignChip ("L"/"C"/"R"), HiddenInRevit, NoExcel, HasCalc  (all bool except text)
+
+    Handlers declared on named, top-level elements
+      category_changed, mode_changed, browse_click, view_changed, reread_click, fields_reset_click,
+      param_search_changed, sort_add_click, sort_clear_click, options_changed, format_selection_changed,
+      fmt_heading_changed, orient_click, align_click, fmt_width_changed, fmt_auto_click, fmt_calc_changed,
+      fmt_flag_click, preview_loading_row, run_click, close_click
+
+    Drawn from code
+      preview_grid  : columns are created in code, Binding("[i]") on List[object] rows,
+                      ElementStyle = CellText (shows the word "Varies" as an orange pill);
+                      preview_loading_row bolds total rows and shrinks blank spacer rows.
+      revit_canvas  : lines + TextBlocks from the layout engine, 3.6 px per mm. width_ruler gets one
+                      TextBlock per column ("18 mm"). Same layout output as the real drafting view.
+    -->
+
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="B2V"/>
+
+        <!-- ================= brushes ================= -->
         <SolidColorBrush x:Key="Accent" Color="#2F6FDE"/>
         <SolidColorBrush x:Key="AccentHover" Color="#2459B8"/>
+        <SolidColorBrush x:Key="AccentSoft" Color="#EAF1FD"/>
         <SolidColorBrush x:Key="Line" Color="#D5D9E0"/>
-        <SolidColorBrush x:Key="Muted" Color="#6B7280"/>
+        <SolidColorBrush x:Key="LineSoft" Color="#E6E8EC"/>
+        <SolidColorBrush x:Key="Muted" Color="#5B6472"/>
+        <SolidColorBrush x:Key="Ink" Color="#1C1F24"/>
+        <SolidColorBrush x:Key="WarnBg" Color="#FDEBD9"/>
+        <SolidColorBrush x:Key="WarnText" Color="#8A4B08"/>
+        <SolidColorBrush x:Key="GoodBg" Color="#E3F3EA"/>
+        <SolidColorBrush x:Key="GoodText" Color="#14653D"/>
 
+        <!-- ================= text and surfaces ================= -->
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="White"/>
             <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
@@ -22,7 +66,7 @@
         <Style x:Key="CardTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
         </Style>
         <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -43,11 +87,38 @@
             <Setter Property="Height" Value="26"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
 
+        <!-- chips -->
+        <Style x:Key="Chip" TargetType="Border">
+            <Setter Property="Background" Value="#EEF0F3"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="5,1"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="ChipWarn" TargetType="Border" BasedOn="{StaticResource Chip}">
+            <Setter Property="Background" Value="{StaticResource WarnBg}"/>
+        </Style>
+        <Style x:Key="ChipGood" TargetType="Border" BasedOn="{StaticResource Chip}">
+            <Setter Property="Background" Value="{StaticResource GoodBg}"/>
+        </Style>
+        <Style x:Key="ChipInfo" TargetType="Border" BasedOn="{StaticResource Chip}">
+            <Setter Property="Background" Value="#E6EEFB"/>
+        </Style>
+        <Style x:Key="ChipText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="#3B4350"/>
+        </Style>
+
+        <!-- ================= buttons ================= -->
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Background" Value="{StaticResource Accent}"/>
-            <Setter Property="Padding" Value="22,7"/>
+            <Setter Property="Padding" Value="24,7"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -70,9 +141,9 @@
             </Setter>
         </Style>
         <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Foreground" Value="#222"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
             <Setter Property="Background" Value="White"/>
-            <Setter Property="Padding" Value="16,7"/>
+            <Setter Property="Padding" Value="14,6"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -94,6 +165,195 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="LinkButton" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource AccentHover}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <TextBlock x:Name="t" Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="t" Property="TextDecorations" Value="Underline"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="MiniButton" TargetType="Button">
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Margin" Value="3,0,0,0"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#3B4350"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="White" CornerRadius="3"
+                                BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#EEF2FA"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- segmented radio buttons (view toggle, orientation, alignment) -->
+        <Style x:Key="Seg" TargetType="RadioButton">
+            <Setter Property="Padding" Value="10,3"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#3B4350"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="bd" Background="White" BorderBrush="{StaticResource Line}"
+                                BorderThickness="1" Margin="0,0,-1,0" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource Accent}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- sort direction toggle: shows A-Z, shows Z-A when checked (bound to Descending) -->
+        <Style x:Key="DirToggle" TargetType="ToggleButton">
+            <Setter Property="Content" Value="A→Z"/>
+            <Setter Property="Width" Value="52"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" Background="White" BorderBrush="{StaticResource Line}"
+                                BorderThickness="1" CornerRadius="3">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoft}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Content" Value="Z→A"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- underlined tab strip for the inner Fields / Sorting / Formatting tabs -->
+        <Style x:Key="LineTabControl" TargetType="TabControl">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.Row="0" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+                                <UniformGrid IsItemsHost="True" Rows="1"/>
+                            </Border>
+                            <ContentPresenter Grid.Row="1" ContentSource="SelectedContent"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="LineTab" TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="bd" BorderBrush="Transparent" BorderThickness="0,0,0,3" Padding="4,10"
+                                Background="Transparent">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#F4F7FC"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- selectable row in the Formatting field list -->
+        <Style x:Key="FmItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="4,0"/>
+            <Setter Property="Height" Value="25"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="bd" Background="Transparent" BorderBrush="Transparent"
+                                BorderThickness="1" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#F4F7FC"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoft}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- preview grid cell text: the word "Varies" becomes an orange pill -->
+        <Style x:Key="CellText" TargetType="TextBlock">
+            <Setter Property="Margin" Value="6,3"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Text, RelativeSource={RelativeSource Self}}" Value="Varies">
+                    <Setter Property="FontStyle" Value="Italic"/>
+                    <Setter Property="Foreground" Value="{StaticResource WarnText}"/>
+                    <Setter Property="Background" Value="{StaticResource WarnBg}"/>
+                    <Setter Property="Padding" Value="6,0"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="GridHeader" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#F0F2F5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -104,7 +364,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- header -->
+        <!-- ================= header ================= -->
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="Abaco Tables" FontSize="20" FontWeight="SemiBold"/>
             <TextBlock Style="{StaticResource Hint}"
@@ -113,12 +373,13 @@
 
         <TabControl x:Name="tabs" Grid.Row="1" Background="Transparent" BorderBrush="{StaticResource Line}">
 
-            <!-- ============================ SETTINGS ============================ -->
+            <!-- ============================================================ -->
+            <!-- SETTINGS                                                     -->
+            <!-- ============================================================ -->
             <TabItem Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,10,6,0">
                     <StackPanel>
 
-                        <!-- 1. source -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource CardTitle}" Text="1 · Source"/>
@@ -132,13 +393,11 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Category"/>
                                     <ComboBox x:Name="category_combo" Grid.Row="0" Grid.Column="1"
                                               SelectionChanged="category_changed"/>
                                     <TextBlock x:Name="category_info" Grid.Row="1" Grid.Column="1"
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
-
                                     <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Wall type"
                                                Margin="0,8,0,0"/>
                                     <StackPanel x:Name="wall_mode_panel" Grid.Row="2" Grid.Column="1"
@@ -153,7 +412,6 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 2. table -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource CardTitle}" Text="2 · Table"/>
@@ -166,28 +424,19 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Title"/>
                                     <TextBox x:Name="tb_title" Grid.Row="0" Grid.Column="1"
                                              ToolTip="Title row of the table. Leave blank for 'Abaco &lt;Category&gt;'."/>
-
                                     <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Table name" Margin="0,6,0,0"/>
                                     <TextBox x:Name="tb_name" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
                                              ToolTip="Excel tab name, and the key used to find the Revit views again on the next run ('&lt;name&gt; table 1', ...)."/>
-
-                                    <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Hidden in Revit" Margin="0,6,0,0"/>
-                                    <TextBox x:Name="tb_hidden" Grid.Row="2" Grid.Column="1" Margin="0,6,0,0"
-                                             ToolTip="Column headings separated by ; or , - dropped from the Revit table only. Excel keeps every column."/>
-
-                                    <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,4,0,0"
-                                               Text="Table name = Excel tab + Revit view key. Hidden columns are removed from the Revit table only; Excel keeps them."/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                               Text="Columns, sorting and formatting are set in the Preview tab."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
 
-                        <!-- 3. revit output -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <CheckBox x:Name="chk_revit" IsChecked="True" Margin="0,0,0,8"
@@ -206,35 +455,28 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Sheet number prefix"/>
                                     <TextBox x:Name="tb_prefix" Grid.Row="0" Grid.Column="1"
                                              ToolTip="Only used for NEW sheets, e.g. AM gives AM-01, AM-02..."/>
-
                                     <TextBlock Grid.Row="0" Grid.Column="3" Style="{StaticResource FieldLabel}" Text="Title block"/>
                                     <ComboBox x:Name="cmb_titleblock" Grid.Row="0" Grid.Column="4"/>
-
                                     <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Text height (mm)" Margin="0,6,0,0"/>
                                     <TextBox x:Name="tb_text_mm" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
                                              ToolTip="Text height on the printed sheet."/>
-
                                     <TextBlock Grid.Row="1" Grid.Column="3" Style="{StaticResource FieldLabel}"
                                                Text="Max table height (mm)" Margin="0,6,0,0"/>
                                     <TextBox x:Name="tb_page_h" Grid.Row="1" Grid.Column="4" Margin="0,6,0,0"
                                              ToolTip="Maximum table height per page. Type blocks are never split across pages."/>
-
                                     <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Style="{StaticResource Hint}" Margin="0,6,0,0"
                                                Text="Re-running updates the existing views in place (their sheet placement is kept). Sheets are only created the first time."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
 
-                        <!-- 4. excel output -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <CheckBox x:Name="chk_excel" IsChecked="True" Margin="0,0,0,8"
-                                          FontSize="13" FontWeight="SemiBold"
-                                          Content="4 · Write to Excel"/>
+                                          FontSize="13" FontWeight="SemiBold" Content="4 · Write to Excel"/>
                                 <Grid IsEnabled="{Binding IsChecked, ElementName=chk_excel}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170"/>
@@ -245,13 +487,11 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Workbook (.xlsx)"/>
                                     <TextBox x:Name="tb_path" Grid.Row="0" Grid.Column="1"/>
                                     <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
                                             Style="{StaticResource SecondaryButton}" Padding="12,3"
                                             Click="browse_click"/>
-
                                     <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
                                                Style="{StaticResource Hint}" Margin="0,4,0,0"
                                                Text="The tab named above is cleared and rewritten; other tabs are untouched. The file is created if it does not exist. Requires desktop Excel."/>
@@ -263,41 +503,373 @@
                 </ScrollViewer>
             </TabItem>
 
-            <!-- ============================ PREVIEW ============================ -->
+            <!-- ============================================================ -->
+            <!-- PREVIEW: left = Fields / Sorting / Formatting, right = live table -->
+            <!-- ============================================================ -->
             <TabItem Header="Preview">
                 <Grid Margin="0,10,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <TextBlock x:Name="preview_note" Grid.Row="0" Style="{StaticResource Hint}" Margin="0,0,0,6"
-                               Text="Click 'Preview table' to see exactly what will be written (all columns, as Excel receives it)."/>
-                    <DataGrid x:Name="preview_grid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
-                              HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                              HorizontalGridLinesBrush="#E6E8EC" Background="White" BorderBrush="{StaticResource Line}"
-                              AlternatingRowBackground="#FAFBFC" CanUserSortColumns="False"
-                              CanUserAddRows="False" RowHeaderWidth="0"/>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="372"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- left: edit tabs -->
+                    <Border Grid.Column="0" Style="{StaticResource Card}" Padding="0" Margin="0">
+                        <TabControl x:Name="edit_tabs" Style="{StaticResource LineTabControl}">
+
+                            <!-- Fields -->
+                            <TabItem Header="Fields" Style="{StaticResource LineTab}">
+                                <Grid Margin="12,10,12,12">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                                        <Button DockPanel.Dock="Right" Content="Reset" Style="{StaticResource LinkButton}"
+                                                Click="fields_reset_click" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="fields_count" DockPanel.Dock="Right" Style="{StaticResource Hint}"
+                                                   Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                        <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Table fields"/>
+                                    </DockPanel>
+
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl x:Name="fields_list">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Height="26">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="16"/>
+                                                            <ColumnDefinition Width="24"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
+                                                        <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"
+                                                                  ToolTip="Show this field in the table"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Label}" VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                        <Border Grid.Column="3" Style="{StaticResource ChipInfo}"
+                                                                Visibility="{Binding HasScope, Converter={StaticResource B2V}}">
+                                                            <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
+                                                        </Border>
+                                                        <Button Grid.Column="4" Tag="up" Content="↑" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Move up"/>
+                                                        <Button Grid.Column="5" Tag="down" Content="↓" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Move down"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+
+                                    <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                                        <Separator Margin="0,0,0,8" Background="{StaticResource LineSoft}"/>
+                                        <TextBlock Style="{StaticResource CardTitle}" Text="Add parameter"/>
+                                        <TextBox x:Name="tb_param_search" TextChanged="param_search_changed"
+                                                 ToolTip="Search the parameters found on this category"/>
+                                        <ScrollViewer Height="120" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                            <ItemsControl x:Name="suggest_list">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Height="26">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis"/>
+                                                            <Border Grid.Column="1" Style="{StaticResource ChipInfo}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
+                                                            </Border>
+                                                            <Button Grid.Column="2" Tag="add" Content="+" Style="{StaticResource MiniButton}"
+                                                                    ToolTip="Add to table"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </Grid>
+                            </TabItem>
+
+                            <!-- Sorting / Grouping -->
+                            <TabItem Header="Sorting / Grouping" Style="{StaticResource LineTab}">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="12,10,12,12">
+                                        <DockPanel Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
+                                                    Click="sort_clear_click" VerticalAlignment="Center"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort by"/>
+                                        </DockPanel>
+
+                                        <ItemsControl x:Name="sort_list">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Height="32">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="24"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
+                                                                HorizontalAlignment="Left">
+                                                            <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        </Border>
+                                                        <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
+                                                                  SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
+                                                        <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
+                                                                      IsChecked="{Binding Descending, Mode=TwoWay}"
+                                                                      ToolTip="Click to switch ascending / descending"/>
+                                                        <CheckBox Grid.Column="3" Content="Gap row" Margin="8,0,0,0" FontSize="11"
+                                                                  IsChecked="{Binding GapRow, Mode=TwoWay}"
+                                                                  ToolTip="Start a new block (blank row) when this value changes"/>
+                                                        <Button Grid.Column="4" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Remove level"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <StackPanel Orientation="Horizontal" Height="26">
+                                            <Border Width="16" Height="16" CornerRadius="8" Background="#8A93A3">
+                                                <TextBlock x:Name="sort_fixed_index" Text="4" Foreground="White" FontSize="10"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Text="then by layer Order (fixed: keeps the build-up in sequence)"/>
+                                        </StackPanel>
+
+                                        <Button Content="+ Add level" Style="{StaticResource SecondaryButton}" Padding="12,4"
+                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="sort_add_click"/>
+
+                                        <Separator Margin="0,12,0,8" Background="{StaticResource LineSoft}"/>
+
+                                        <CheckBox x:Name="chk_grand_totals" Content="Grand totals" Margin="0,0,0,6"
+                                                  Checked="options_changed" Unchecked="options_changed"/>
+                                        <CheckBox x:Name="chk_itemize" Content="Itemize every instance"
+                                                  Checked="options_changed" Unchecked="options_changed"/>
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0">
+                                            <Run Text="Off: identical elements are merged into one row, and a column whose values differ inside a group shows "/>
+                                            <Run Text="Varies" FontStyle="Italic" Foreground="{StaticResource WarnText}"/>
+                                            <Run Text=". On: one row per element, nothing is merged."/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </TabItem>
+
+                            <!-- Formatting -->
+                            <TabItem Header="Formatting" Style="{StaticResource LineTab}">
+                                <Grid Margin="12,10,12,12">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="190"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                                                   Text="select one to format"/>
+                                        <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Fields"/>
+                                    </DockPanel>
+
+                                    <Border Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="3" Padding="2">
+                                        <ListBox x:Name="format_list" BorderThickness="0" ItemContainerStyle="{StaticResource FmItem}"
+                                                 SelectionChanged="format_selection_changed"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                        <Border Grid.Column="1" Style="{StaticResource Chip}">
+                                                            <TextBlock Style="{StaticResource ChipText}" Text="{Binding AlignChip}"/>
+                                                        </Border>
+                                                        <Border Grid.Column="2" Style="{StaticResource ChipWarn}"
+                                                                Visibility="{Binding HiddenInRevit, Converter={StaticResource B2V}}">
+                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="hidden"/>
+                                                        </Border>
+                                                        <Border Grid.Column="3" Style="{StaticResource ChipWarn}"
+                                                                Visibility="{Binding NoExcel, Converter={StaticResource B2V}}">
+                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="no Excel"/>
+                                                        </Border>
+                                                        <Border Grid.Column="4" Style="{StaticResource ChipGood}"
+                                                                Visibility="{Binding HasCalc, Converter={StaticResource B2V}}">
+                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource GoodText}" Text="Σ"/>
+                                                        </Border>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </Border>
+
+                                    <StackPanel x:Name="fmt_panel" Grid.Row="2" Margin="0,12,0,0" IsEnabled="False">
+                                        <TextBlock x:Name="fmt_title" Style="{StaticResource CardTitle}" Text="Select a field"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="130"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="34"/>
+                                                <RowDefinition Height="34"/>
+                                                <RowDefinition Height="34"/>
+                                                <RowDefinition Height="34"/>
+                                                <RowDefinition Height="34"/>
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Heading"/>
+                                            <TextBox x:Name="fmt_heading" Grid.Row="0" Grid.Column="1" TextChanged="fmt_heading_changed"/>
+
+                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Heading orientation"/>
+                                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <RadioButton x:Name="orient_h" GroupName="orient" Style="{StaticResource Seg}"
+                                                             Tag="horizontal" Content="Horizontal" IsChecked="True" Click="orient_click"/>
+                                                <RadioButton x:Name="orient_v" GroupName="orient" Style="{StaticResource Seg}"
+                                                             Tag="vertical" Content="Vertical" Click="orient_click"/>
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Alignment"/>
+                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <RadioButton x:Name="align_l" GroupName="align" Style="{StaticResource Seg}"
+                                                             Tag="left" Content="Left" IsChecked="True" Click="align_click"/>
+                                                <RadioButton x:Name="align_c" GroupName="align" Style="{StaticResource Seg}"
+                                                             Tag="center" Content="Center" Click="align_click"/>
+                                                <RadioButton x:Name="align_r" GroupName="align" Style="{StaticResource Seg}"
+                                                             Tag="right" Content="Right" Click="align_click"/>
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Column width (Revit)"/>
+                                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBox x:Name="fmt_width" Width="56" TextChanged="fmt_width_changed"
+                                                         ToolTip="Column width on the sheet, in mm"/>
+                                                <TextBlock Style="{StaticResource Hint}" Margin="6,0,10,0" VerticalAlignment="Center" Text="mm"/>
+                                                <CheckBox x:Name="fmt_auto" Content="Auto" IsChecked="True" Click="fmt_auto_click"/>
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Row="4" Style="{StaticResource FieldLabel}" Text="Calculation"/>
+                                            <ComboBox x:Name="fmt_calc" Grid.Row="4" Grid.Column="1" SelectedIndex="0"
+                                                      SelectionChanged="fmt_calc_changed">
+                                                <ComboBoxItem Tag="none" Content="None"/>
+                                                <ComboBoxItem Tag="total" Content="Calculate totals"/>
+                                                <ComboBoxItem Tag="min" Content="Minimum"/>
+                                                <ComboBoxItem Tag="max" Content="Maximum"/>
+                                                <ComboBoxItem Tag="minmax" Content="Minimum and maximum"/>
+                                            </ComboBox>
+                                        </Grid>
+
+                                        <Separator Margin="0,6,0,6" Background="{StaticResource LineSoft}"/>
+                                        <CheckBox x:Name="fmt_hidden" Content="Hidden field (Revit)" Margin="0,0,0,6" Click="fmt_flag_click"/>
+                                        <CheckBox x:Name="fmt_excel" Content="Show in Excel" IsChecked="True" Click="fmt_flag_click"/>
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                                   Text="Hidden field leaves the column out of the Revit table. Show in Excel decides whether it is written to the workbook. A column hidden in Revit but off in Excel is still available for sorting."/>
+                                    </StackPanel>
+                                </Grid>
+                            </TabItem>
+
+                        </TabControl>
+                    </Border>
+
+                    <!-- right: live preview -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                            <Button DockPanel.Dock="Right" Content="Re-read model" Style="{StaticResource SecondaryButton}"
+                                    Padding="12,4" Click="reread_click"/>
+                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,12,0">
+                                <RadioButton x:Name="view_excel" GroupName="view" Style="{StaticResource Seg}"
+                                             Content="As Excel" IsChecked="True" Checked="view_changed"/>
+                                <RadioButton x:Name="view_revit" GroupName="view" Style="{StaticResource Seg}"
+                                             Content="As Revit" Checked="view_changed"/>
+                            </StackPanel>
+                            <TextBlock x:Name="preview_status" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                                       Text="Open this tab to read the model."/>
+                        </DockPanel>
+
+                        <!-- As Excel -->
+                        <Border x:Name="excel_host" Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                Background="White">
+                            <DataGrid x:Name="preview_grid" AutoGenerateColumns="False" IsReadOnly="True"
+                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                      HorizontalGridLinesBrush="#E6E8EC" Background="White" BorderThickness="0"
+                                      CanUserAddRows="False" CanUserSortColumns="False" RowHeaderWidth="0"
+                                      ColumnHeaderStyle="{StaticResource GridHeader}"
+                                      LoadingRow="preview_loading_row"/>
+                        </Border>
+
+                        <!-- As Revit -->
+                        <Grid x:Name="revit_host" Grid.Row="1" Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+                                <Border Style="{StaticResource ChipWarn}" Margin="0,0,8,0">
+                                    <TextBlock x:Name="revit_hidden_note" Style="{StaticResource ChipText}"
+                                               Foreground="{StaticResource WarnText}" Text="Hidden in Revit: none"/>
+                                </Border>
+                                <Border Style="{StaticResource ChipGood}" Margin="0,0,8,0">
+                                    <TextBlock x:Name="revit_calc_note" Style="{StaticResource ChipText}"
+                                               Foreground="{StaticResource GoodText}" Text="No calculations"/>
+                                </Border>
+                                <Border Style="{StaticResource Chip}" Margin="0">
+                                    <TextBlock x:Name="revit_scale_note" Style="{StaticResource ChipText}"
+                                               Text="Preview scale: 1 mm on sheet = 3.6 px"/>
+                                </Border>
+                            </WrapPanel>
+                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                          Background="#E3E7ED">
+                                <Border Background="White" Padding="14" Margin="14" HorizontalAlignment="Left"
+                                        VerticalAlignment="Top">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.25"/>
+                                    </Border.Effect>
+                                    <StackPanel>
+                                        <StackPanel x:Name="width_ruler" Orientation="Horizontal" Height="14"/>
+                                        <Canvas x:Name="revit_canvas"/>
+                                    </StackPanel>
+                                </Border>
+                            </ScrollViewer>
+                        </Grid>
+                    </Grid>
                 </Grid>
             </TabItem>
         </TabControl>
 
-        <!-- log (replaces the Dynamo Watch nodes) -->
+        <!-- ================= log ================= -->
         <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,10,0,10" Padding="8">
-            <TextBox x:Name="log_box" Height="110" IsReadOnly="True" BorderThickness="0"
+            <TextBox x:Name="log_box" Height="96" IsReadOnly="True" BorderThickness="0"
                      FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
         </Border>
 
-        <!-- buttons -->
+        <!-- ================= buttons ================= -->
         <DockPanel Grid.Row="3" LastChildFill="False">
             <TextBlock x:Name="status_text" DockPanel.Dock="Left" Style="{StaticResource Hint}"
                        VerticalAlignment="Center" Text="Ready"/>
             <Button x:Name="btn_close" DockPanel.Dock="Right" Content="Close" Margin="8,0,0,0"
-                    Style="{StaticResource SecondaryButton}" Click="close_click"/>
-            <Button x:Name="btn_run" DockPanel.Dock="Right" Content="Run" Margin="8,0,0,0"
+                    Style="{StaticResource SecondaryButton}" Padding="16,7" Click="close_click"/>
+            <Button x:Name="btn_run" DockPanel.Dock="Right" Content="Run"
                     Style="{StaticResource PrimaryButton}" Click="run_click"/>
-            <Button x:Name="btn_preview" DockPanel.Dock="Right" Content="Preview table"
-                    Style="{StaticResource SecondaryButton}" Click="preview_click"/>
         </DockPanel>
     </Grid>
 </Window>
