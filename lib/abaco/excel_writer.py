@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Write a table to one tab of an .xlsx through Excel COM (late binding, one Excel instance).
+"""Write a sheet model (abaco.sheet.Sheet) to one tab of an .xlsx through Excel COM
+(late binding, one Excel instance).
 
-Port of the Dynamo Excel node (2622c8): open or create the workbook -> wipe the tab ->
-write the table -> merge/format the title -> save -> close.
+Open or create the workbook -> wipe the tab -> write values -> formulas, number formats, alignment,
+vertical headings, bold rows -> fit columns -> merge/format the title -> save -> close.
+Range.Formula and Range.NumberFormat are locale independent (English names), so this also works on an
+Italian-language Excel.
 """
 import os
 import System
 from System import Type, Activator, Array
 from System.Reflection import BindingFlags, Missing
 from System.Runtime.InteropServices import Marshal
+
+from abaco.sheet import col_letter
+
+_ALIGN = {"left": -4131, "center": -4108, "right": -4152}     # xlLeft, xlCenter, xlRight
 
 
 def _args(a):
@@ -27,17 +34,14 @@ def _call(o, name, *a):
     return o.GetType().InvokeMember(name, BindingFlags.InvokeMethod, None, o, _args(a))
 
 
-def col_letter(n):
-    s = ""
-    while n > 0:
-        n, rem = divmod(n - 1, 26)
-        s = chr(65 + rem) + s
-    return s
+def _range(ws, a1):
+    return _get(ws, "Range", a1)
 
 
-def write_table(path, sheet_name, data):
-    nrows = len(data)
-    ncols = max(len(r) for r in data) if nrows else 1
+def write_table(path, sheet_name, sheet):
+    nrows = sheet.nrows
+    ncols = sheet.ncols
+    data = sheet.values
 
     folder = os.path.dirname(path)
     if folder and not os.path.isdir(folder):
@@ -85,7 +89,7 @@ def write_table(path, sheet_name, data):
         _call(cells, "UnMerge")
         _call(cells, "Clear")
 
-        # 2. write the table in one go
+        # 2. write the values in one go
         arr = Array.CreateInstance(System.Object, nrows, ncols)
         for i, r in enumerate(data):
             for j, v in enumerate(r):
@@ -95,12 +99,32 @@ def write_table(path, sheet_name, data):
         rng = _get(ws, "Range", _get(ws, "Cells", 1, 1), _get(ws, "Cells", nrows, ncols))
         _put(rng, "Value2", arr)
 
-        # 3. formatting: headings bold, columns fitted, title merged and centred over the table
         last_col = col_letter(ncols)
-        if nrows > 1:
-            _call(_get(_get(ws, "Range", "A2:%s%d" % (last_col, nrows)), "Columns"), "AutoFit")
-            _put(_get(_get(ws, "Range", "A2:%s2" % last_col), "Font"), "Bold", True)
-        title = _get(ws, "Range", "A1:%s1" % last_col)
+        if nrows > 2:
+            # 3. formulas: total / min / max rows stay live
+            for (r, c), f in sheet.formulas.items():
+                _put(_get(ws, "Cells", r, c), "Formula", f)
+
+            # 4. per column: number format and alignment (headings included)
+            for ci in range(ncols):
+                letter = col_letter(ci + 1)
+                fmt = sheet.numfmts[ci]
+                if fmt != u"General":
+                    _put(_range(ws, "%s3:%s%d" % (letter, letter, nrows)), "NumberFormat", fmt)
+                _put(_range(ws, "%s2:%s%d" % (letter, letter, nrows)), "HorizontalAlignment",
+                     _ALIGN.get(sheet.aligns[ci], -4131))
+                if sheet.vertical[ci]:
+                    _put(_range(ws, "%s2" % letter), "Orientation", 90)
+
+            # 5. bold: headings and total rows
+            for r in sheet.bold_rows:
+                _put(_get(_range(ws, "A%d:%s%d" % (r, last_col, r)), "Font"), "Bold", True)
+
+            # 6. fit the columns (title row excluded)
+            _call(_get(_range(ws, "A2:%s%d" % (last_col, nrows)), "Columns"), "AutoFit")
+
+        # 7. title merged and centred over the table
+        title = _range(ws, "A1:%s1" % last_col)
         _call(title, "Merge")
         _put(title, "HorizontalAlignment", -4108)      # xlCenter
         font = _get(title, "Font")
@@ -111,7 +135,8 @@ def write_table(path, sheet_name, data):
             _call(wb, "SaveAs", path)
         else:
             _call(wb, "Save")
-        return u"Written %d rows x %d columns to tab '%s' in %s" % (nrows, ncols, sheet_name, path)
+        return u"Written %d rows x %d columns to tab '%s' in %s (%d live formulas)" % (
+            nrows, ncols, sheet_name, path, len(sheet.formulas))
     finally:
         try:
             if wb is not None:

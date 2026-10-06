@@ -41,7 +41,7 @@ M2 = u"m\u00b2"
 class Field(object):
     """Anything that can become a column."""
 
-    def __init__(self, key, label, scope, kind, unit=None, aggregate=None, core=False):
+    def __init__(self, key, label, scope, kind, unit=None, aggregate=None, core=False, group=None):
         if scope not in SCOPES:
             raise ValueError("bad scope %r" % (scope,))
         if kind not in KINDS:
@@ -53,15 +53,16 @@ class Field(object):
         self.unit = unit
         self.aggregate = aggregate      # "sum" = the pipeline adds this up when it groups elements
         self.core = core                # built-in field, always in the catalogue
+        self.group = group              # Revit parameter group label, e.g. u"Vertical Grid" (tells twins apart)
 
     def to_dict(self):
         return dict(key=self.key, label=self.label, scope=self.scope, kind=self.kind,
-                    unit=self.unit, aggregate=self.aggregate, core=self.core)
+                    unit=self.unit, aggregate=self.aggregate, core=self.core, group=self.group)
 
     @staticmethod
     def from_dict(d):
         return Field(d["key"], d["label"], d["scope"], d["kind"], d.get("unit"),
-                     d.get("aggregate"), d.get("core", False))
+                     d.get("aggregate"), d.get("core", False), d.get("group"))
 
     def __repr__(self):
         return "Field(%r, %r, %s, %s)" % (self.key, self.label, self.scope, self.kind)
@@ -166,14 +167,27 @@ class RecordSet(object):
         return self._fields.get(key)
 
     def display_labels(self):
-        """key -> label; labels used by more than one field get a scope tag, e.g. 'Comments (type)'."""
+        """key -> unique label. Clashes get a scope tag, then the parameter group, then the key:
+        'Comments (type)', 'Spacing (type, Vertical Grid)'."""
         tags = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated"}
         count = {}
         for f in self.fields:
             count[f.label] = count.get(f.label, 0) + 1
-        out = {}
+        step1 = {}
         for f in self.fields:
-            out[f.key] = f.label if count[f.label] == 1 else u"%s (%s)" % (f.label, tags[f.scope])
+            step1[f.key] = f.label if count[f.label] == 1 else u"%s (%s)" % (f.label, tags[f.scope])
+        count2 = {}
+        for t in step1.values():
+            count2[t] = count2.get(t, 0) + 1
+        out, used = {}, set()
+        for f in self.fields:
+            t = step1[f.key]
+            if count2[t] > 1 and f.group:
+                t = u"%s (%s, %s)" % (f.label, tags[f.scope], f.group)
+            if t in used:
+                t = u"%s [%s]" % (t, f.key)
+            used.add(t)
+            out[f.key] = t
         return out
 
     # ---- data

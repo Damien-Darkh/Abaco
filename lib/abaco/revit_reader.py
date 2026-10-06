@@ -31,7 +31,8 @@ _GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 
 # parameters already covered by a core field: kept out of the catalogue to avoid duplicates
 _SKIP_KEYS = set(["ALL_MODEL_TYPE_MARK", "SYMBOL_NAME_PARAM", "WALL_BASE_CONSTRAINT", "FAMILY_LEVEL_PARAM",
-                  "SCHEDULE_LEVEL_PARAM", "INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM"])
+                  "SCHEDULE_LEVEL_PARAM", "INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM",
+                  "ELEM_CATEGORY_PARAM_MT"])      # twin of ELEM_CATEGORY_PARAM, same value
 
 _WIDTH_NAMES = ["WINDOW_WIDTH", "DOOR_WIDTH", "FAMILY_WIDTH_PARAM", "Width"]
 _HEIGHT_NAMES = ["WINDOW_HEIGHT", "DOOR_HEIGHT", "FAMILY_HEIGHT_PARAM", "WALL_USER_HEIGHT_PARAM", "Height"]
@@ -186,8 +187,14 @@ def _read_param(doc, p, kind):
         return p.AsDouble()
     if kind == "elementid":
         eid = p.AsElementId()
-        if eid is None or eid_val(eid) < 0:
+        if eid is None:
             return None
+        if eid_val(eid) < 0:                    # negative = built-in category (e.g. the 'Category' parameter)
+            try:
+                c = DB.Category.GetCategory(doc, eid)
+                return (c.Name if c is not None else None) or None
+            except Exception:
+                return None
         e = doc.GetElement(eid)
         nm = getattr(e, "Name", None) if e is not None else None
         return nm or None
@@ -274,6 +281,8 @@ def _element_values(doc, el, typ, is_curtain):
     v[K_WIDTH] = _length(el, typ, _WIDTH_NAMES)
     v[K_HEIGHT] = _length(el, typ, _CURTAIN_HEIGHT_NAMES if is_curtain else _HEIGHT_NAMES)
     p = el.get_Parameter(DB.BuiltInParameter.HOST_AREA_COMPUTED)
+    if p is None or not p.HasValue:
+        p = el.get_Parameter(DB.BuiltInParameter.ROOM_AREA)      # rooms
     v[K_AREA] = convert(p.AsDouble(), "area") if (p is not None and p.HasValue) else None
     p = el.get_Parameter(DB.BuiltInParameter.CURVE_ELEM_LENGTH)
     v[K_LENGTH] = convert(p.AsDouble(), "length") if (p is not None and p.HasValue) else None
@@ -307,7 +316,12 @@ def _scan_params(obj, scope, rs):
                 continue
             if key.startswith(u"name:"):
                 rs.notes.append(u"Parameter '%s' has no stable id; its key depends on the Revit language." % label)
-            rs.add_field(Field(key, label, scope, kind, _UNITS.get(kind)))
+            group = None
+            try:
+                group = DB.LabelUtils.GetLabelForGroup(p.Definition.GetGroupTypeId()) or None
+            except Exception:
+                pass
+            rs.add_field(Field(key, label, scope, kind, _UNITS.get(kind), group=group))
         except Exception:
             continue
 
@@ -326,15 +340,14 @@ def read_category(doc, category, log=None):
     n = 0
     for el in elements_filter(doc, category):
         type_id = el.GetTypeId()
-        typ = doc.GetElement(type_id)
-        if typ is None:
-            continue
+        typ = doc.GetElement(type_id)               # None for typeless elements (rooms, areas, spaces...)
         tkey = eid_val(type_id)
         tr = rs.types.get(tkey)
         if tr is None:
-            tr = _type_record(doc, typ, tkey)
+            tr = _type_record(doc, typ, tkey) if typ is not None else TypeRecord(tkey, {})
             rs.add_type(tr)
-            type_objs[tkey] = typ
+            if typ is not None:
+                type_objs[tkey] = typ
             reps[tkey] = el
         er = ElementRecord(eid_val(el.Id), tkey, _element_values(doc, el, typ, tr.is_curtain))
         if tr.is_layered:
@@ -343,6 +356,10 @@ def read_category(doc, category, log=None):
         n += 1
         if n % 200 == 0:
             log(u"Reading model... %d elements" % n)
+
+    if -1 in rs.types:
+        rs.notes.append(u"%d elements have no type (type fields are empty for them)." % sum(
+            1 for e in rs.elements if e.type_id == -1))
 
     # catalogue: every used type, plus one representative instance per type
     for tkey, typ in type_objs.items():

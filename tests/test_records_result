@@ -1,16 +1,15 @@
-> python3 tests/test_records.py
+> python ./tests/test_records.py
 ok   test_add_field_ignores_duplicates
 ok   test_core_labels_match_v1
 ok   test_display_labels_tag_clashes
+ok   test_display_labels_twins_use_group
 ok   test_field_roundtrip_and_validation
 ok   test_material_ids_distinct_in_order
 ok   test_modes_split_curtain_walls
 ok   test_summary
 ok   test_value_resolves_scope
-8 tests passed
+9 tests passed
 
-
-in revit test 1:
 
 Records check: Walls
 
@@ -26,24 +25,154 @@ standard: 97 v1 rows checked, 0 mismatches, 238 elements in records for this mod
 
 curtain walls: 6 v1 rows checked, 0 mismatches, 35 elements in records for this mode.
 
-•on-demand 'Type Image' (type): first values [None, None, None]
+•on-demand 'Type Image' (type/elementid): 0 of 273 elements have a value, e.g. []
 
-•on-demand 'Keynote' (type): first values [None, None, None]
+•on-demand 'Keynote' (type/text): 1 of 273 elements have a value, e.g. ['H11']
 
-•on-demand 'Category' (type): first values [None, None, None]
+•on-demand 'Category (type, Other)' (type/elementid): 273 of 273 elements have a value, e.g. ['Walls', 'Walls']
 
-in revit test 2:
+•on-demand 'Category (type, Other) [ELEM_CATEGORY_PARAM]' (type/elementid): 273 of 273 elements have a value, e.g. ['Walls', 'Walls']
+
+•on-demand 'Type IFC Predefined Type' (type/text): 0 of 273 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC As' (type/text): 0 of 273 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC' (type/text): 273 of 273 elements have a value, e.g. ['Default', 'Default']
+
+•on-demand 'Type IfcGUID' (type/text): 273 of 273 elements have a value, e.g. ['1eiR1DJYfAie3sgDOxvW59', '1eiR1DJYfAie3sgDOxvW59']
+
+•on-demand 'Image' (element/elementid): 0 of 273 elements have a value, e.g. []
+
+•on-demand 'Cross-Section' (element/text): 261 of 273 elements have a value, e.g. ['Vertical', 'Vertical']
+
+•on-demand 'IFC Predefined Type' (element/text): 0 of 273 elements have a value, e.g. []
+
+•on-demand 'Export to IFC As' (element/text): 0 of 273 elements have a value, e.g. []
+
+•on-demand 'Export to IFC' (element/text): 273 of 273 elements have a value, e.g. ['By Type', 'By Type']
+
+•on-demand 'IfcGUID' (element/text): 273 of 273 elements have a value, e.g. ['0TpUFt8ZjE7x83mo15bZV_', '0TpUFt8ZjE7x83mo15bZV$']
+
+•on-demand 'Offset (instance, Horizontal Grid)' (element/length): 35 of 273 elements have a value, e.g. [0.0, 0.0]
+
+•on-demand 'Offset (instance, Vertical Grid)' (element/length): 35 of 273 elements have a value, e.g. [0.0, 0.0]
+
+
+
+Records check: Doors
+
+•Doors: 89 elements, 8 types (0 layered), 0 curtain-wall elements, 158 fields in catalogue.
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Type Image [type/elementid], Keynote [type/text], Category [type/elementid], Category [type/elementid], Type IFC Predefined Type [type/text], Export Type to IFC As [type/text], Export Type to IFC [type/text], Type IfcGUID [type/text], Design Option [type/elementid], Model [type/text], Manufacturer [type/text], Type Comments [type/text], URL [type/text], Description [type/text], Code Name [type/text], Define Thermal Properties by [type/text], Construction Type Id [type/text], Analytic Construction [type/text], Visual Light Transmittance [type/number], Solar Heat Gain Coefficient [type/number], Thermal Resistance (R) [type/number], Heat Transfer Coefficient (U) [type/number], OmniClass Title [type/text], OmniClass Number [type/text], Assembly Description [type/text]
+
+
+standard: 15 v1 rows checked, 0 mismatches, 89 elements in records for this mode.
+
+•on-demand 'Type Image' (type/elementid): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'Keynote' (type/text): 11 of 89 elements have a value, e.g. ['CS1.Gress porcellanato', 'CS1.Gress porcellanato']
+
+•on-demand 'Category (type, Other)' (type/elementid): 89 of 89 elements have a value, e.g. ['Doors', 'Doors']
+
+•on-demand 'Category (type, Other) [ELEM_CATEGORY_PARAM]' (type/elementid): 89 of 89 elements have a value, e.g. ['Doors', 'Doors']
+
+•on-demand 'Type IFC Predefined Type' (type/text): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC As' (type/text): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC' (type/text): 89 of 89 elements have a value, e.g. ['Default', 'Default']
+
+•on-demand 'Type IfcGUID' (type/text): 89 of 89 elements have a value, e.g. ['2IDMhVWWLC_PCZKVhkPjV1', '2IDMhVWWLC_PCZKVhkPjV1']
+
+•on-demand 'Image' (element/elementid): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'IFC Predefined Type' (element/text): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'Export to IFC As' (element/text): 0 of 89 elements have a value, e.g. []
+
+•on-demand 'Export to IFC' (element/text): 89 of 89 elements have a value, e.g. ['By Type', 'By Type']
+
+•on-demand 'IfcGUID' (element/text): 89 of 89 elements have a value, e.g. ['0TpUFt8ZjE7x83mo15bWuk', '0TpUFt8ZjE7x83mo15bWuK']
+
+•on-demand 'Volume' (element/volume): 89 of 89 elements have a value, e.g. [0.12069586342275601, 0.12069586342275601]
+
+•on-demand 'Area' (element/area): 89 of 89 elements have a value, e.g. [4.0397235841278309, 4.0397235841278309]
+
+•on-demand 'Phase Demolished' (element/elementid): 0 of 89 elements have a value, e.g. []
+
+
+
+Records check: Windows
+
+•Windows: 24 elements, 2 types (0 layered), 0 curtain-wall elements, 172 fields in catalogue.
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Type Image [type/elementid], Keynote [type/text], Category [type/elementid], Category [type/elementid], Type IFC Predefined Type [type/text], Export Type to IFC As [type/text], Export Type to IFC [type/text], Type IfcGUID [type/text], Design Option [type/elementid], Model [type/text], Manufacturer [type/text], Type Comments [type/text], URL [type/text], Description [type/text], Code Name [type/text], Define Thermal Properties by [type/text], Analytic Construction [type/text], Visual Light Transmittance [type/number], Solar Heat Gain Coefficient [type/number], Thermal Resistance (R) [type/number], Heat Transfer Coefficient (U) [type/number], OmniClass Title [type/text], OmniClass Number [type/text], Assembly Description [type/text], Assembly Code [type/text]
+
+
+standard: 2 v1 rows checked, 0 mismatches, 24 elements in records for this mode.
+
+•on-demand 'Type Image' (type/elementid): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'Keynote' (type/text): 24 of 24 elements have a value, e.g. ['08520', '08520']
+
+•on-demand 'Category (type, Other)' (type/elementid): 24 of 24 elements have a value, e.g. ['Windows', 'Windows']
+
+•on-demand 'Category (type, Other) [ELEM_CATEGORY_PARAM]' (type/elementid): 24 of 24 elements have a value, e.g. ['Windows', 'Windows']
+
+•on-demand 'Type IFC Predefined Type' (type/text): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC As' (type/text): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC' (type/text): 24 of 24 elements have a value, e.g. ['Default', 'Default']
+
+•on-demand 'Type IfcGUID' (type/text): 24 of 24 elements have a value, e.g. ['1izcE0lc13xudx59OKTHGI', '1izcE0lc13xudx59OKTHGI']
+
+•on-demand 'Image' (element/elementid): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'IFC Predefined Type' (element/text): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'Export to IFC As' (element/text): 0 of 24 elements have a value, e.g. []
+
+•on-demand 'Export to IFC' (element/text): 24 of 24 elements have a value, e.g. ['By Type', 'By Type']
+
+•on-demand 'IfcGUID' (element/text): 24 of 24 elements have a value, e.g. ['1izcE0lc13xudx59OKTHJJ', '1izcE0lc13xudx59OKTHHE']
+
+•on-demand 'Volume' (element/volume): 24 of 24 elements have a value, e.g. [0.2193676441624017, 0.2193676441624017]
+
+•on-demand 'Area' (element/area): 24 of 24 elements have a value, e.g. [10.787508428664880, 10.787508428664880]
+
+•on-demand 'Phase Demolished' (element/elementid): 0 of 24 elements have a value, e.g. []
+
+
 
 Records check: Rooms
 
-•Rooms: 0 elements, 0 types (0 layered), 0 curtain-wall elements, 15 fields in catalogue.
+•Rooms: 39 elements, 1 types (0 layered), 0 curtain-wall elements, 102 fields in catalogue.
 
-•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer]
+•Note: 39 elements have no type (type fields are empty for them).
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Image [element/elementid], Plenum Lighting Contribution [element/number], Category [element/elementid], Category [element/elementid], Calculated Supply Airflow per area [element/number], Calculated Cooling Load per area [element/number], Calculated Heating Load per area [element/number], Actual Lighting Load per area [element/number], Actual Power Load per area [element/number], Heat Load Values [element/text], Lighting Load Units [element/text], Power Load Units [element/text], Sensible Heat Gain per person [element/number], Specified Lighting Load [element/number], Specified Power Load [element/number], Actual Lighting Load [element/number], Actual Power Load [element/number], Base Lighting Load on [element/text], Base Power Load on [element/text], Specified Lighting Load per area [element/number], Specified Power Load per area [element/number], Latent Heat Gain per person [element/number], Total Heat Gain per person [element/number], Area per Person [element/area], Number of People [element/number]
 
 
-standard: 0 v1 rows checked, 0 mismatches, 0 elements in records for this mode.
+standard: 0 v1 rows checked, 0 mismatches, 39 elements in records for this mode.
 
-in revit test 3:
+•on-demand 'Image' (element/elementid): 0 of 39 elements have a value, e.g. []
+
+•on-demand 'Plenum Lighting Contribution' (element/number): 39 of 39 elements have a value, e.g. [0.20000000000000001, 0.20000000000000001]
+
+•on-demand 'Category (instance, Other)' (element/elementid): 39 of 39 elements have a value, e.g. ['Rooms', 'Rooms']
+
+•on-demand 'Category (instance, Other) [ELEM_CATEGORY_PARAM]' (element/elementid): 39 of 39 elements have a value, e.g. ['Rooms', 'Rooms']
+
+•on-demand 'Calculated Supply Airflow per area' (element/number): 0 of 39 elements have a value, e.g. []
+
+•on-demand 'Calculated Cooling Load per area' (element/number): 0 of 39 elements have a value, e.g. []
+
+•on-demand 'Calculated Heating Load per area' (element/number): 0 of 39 elements have a value, e.g. []
+
+•on-demand 'Actual Lighting Load per area' (element/number): 39 of 39 elements have a value, e.g. [0.0, 0.0]
+
+
 
 Records check: Floors
 
@@ -54,8 +183,77 @@ Records check: Floors
 
 standard: 51 v1 rows checked, 0 mismatches, 17 elements in records for this mode.
 
-•on-demand 'Type Image' (type): first values [None, None, None]
+•on-demand 'Type Image' (type/elementid): 0 of 17 elements have a value, e.g. []
 
-•on-demand 'Keynote' (type): first values [None, None, None]
+•on-demand 'Keynote' (type/text): 0 of 17 elements have a value, e.g. []
 
-•on-demand 'Category' (type): first values [None, None, None]
+•on-demand 'Category (type, Other)' (type/elementid): 17 of 17 elements have a value, e.g. ['Floors', 'Floors']
+
+•on-demand 'Category (type, Other) [ELEM_CATEGORY_PARAM]' (type/elementid): 17 of 17 elements have a value, e.g. ['Floors', 'Floors']
+
+•on-demand 'Type IFC Predefined Type' (type/text): 0 of 17 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC As' (type/text): 0 of 17 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC' (type/text): 17 of 17 elements have a value, e.g. ['Default', 'Default']
+
+•on-demand 'Type IfcGUID' (type/text): 17 of 17 elements have a value, e.g. ['1eiR1DJYfAie3sgDOxvW9y', '2IAjAszuL2mfF6AbS36fXz']
+
+•on-demand 'Image' (element/elementid): 0 of 17 elements have a value, e.g. []
+
+•on-demand 'IFC Predefined Type' (element/text): 0 of 17 elements have a value, e.g. []
+
+•on-demand 'Export to IFC As' (element/text): 0 of 17 elements have a value, e.g. []
+
+•on-demand 'Export to IFC' (element/text): 17 of 17 elements have a value, e.g. ['By Type', 'By Type']
+
+•on-demand 'IfcGUID' (element/text): 17 of 17 elements have a value, e.g. ['0TpUFt8ZjE7x83mo15bWra', '0TpUFt8ZjE7x83mo15bWvQ']
+
+•on-demand 'Has Association' (element/yesno): 17 of 17 elements have a value, e.g. ['No', 'No']
+
+•on-demand 'Volume' (element/volume): 17 of 17 elements have a value, e.g. [307.88078495623023, 65.684095610669530]
+
+•on-demand 'Area' (element/area): 17 of 17 elements have a value, e.g. [923.18076448644729, 328.42047805334761]
+
+
+
+Records check: Roofs
+
+•Roofs: 1 elements, 1 types (1 layered), 0 curtain-wall elements, 104 fields in catalogue.
+
+•Fields: Type Mark [type/text], Type Name [type/text], Family [type/text], Order [layer/integer], Material [layer/text], Thickness (m) [layer/length], Function [layer/text], Material Area (m²) [layer/area], Level [element/text], Width (m) [element/length], Height (m) [element/length], Total Length (m) [element/length], Area (m²) [element/area], Count [group/integer], Element Id [element/integer], Type Image [type/elementid], Keynote [type/text], Category [type/elementid], Category [type/elementid], Type IFC Predefined Type [type/text], Export Type to IFC As [type/text], Export Type to IFC [type/text], Type IfcGUID [type/text], Design Option [type/elementid], Model [type/text], Manufacturer [type/text], Type Comments [type/text], URL [type/text], Description [type/text], Roughness [type/integer], Absorptance [type/number], Thermal Mass [type/number], Thermal Resistance (R) [type/number], Heat Transfer Coefficient (U) [type/number], Assembly Description [type/text], Assembly Code [type/text], Coarse Scale Fill Color [type/integer], Coarse Scale Fill Pattern [type/elementid], Edited by [type/text], Workset [type/text]
+
+
+standard: 6 v1 rows checked, 0 mismatches, 1 elements in records for this mode.
+
+•on-demand 'Type Image' (type/elementid): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Keynote' (type/text): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Category (type, Other)' (type/elementid): 1 of 1 elements have a value, e.g. ['Roofs']
+
+•on-demand 'Category (type, Other) [ELEM_CATEGORY_PARAM]' (type/elementid): 1 of 1 elements have a value, e.g. ['Roofs']
+
+•on-demand 'Type IFC Predefined Type' (type/text): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC As' (type/text): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Export Type to IFC' (type/text): 1 of 1 elements have a value, e.g. ['Default']
+
+•on-demand 'Type IfcGUID' (type/text): 1 of 1 elements have a value, e.g. ['3XVmvO60v6oOyGK8N5ZUf9']
+
+•on-demand 'Image' (element/elementid): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'IFC Predefined Type' (element/text): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Export to IFC As' (element/text): 0 of 1 elements have a value, e.g. []
+
+•on-demand 'Export to IFC' (element/text): 1 of 1 elements have a value, e.g. ['By Type']
+
+•on-demand 'IfcGUID' (element/text): 1 of 1 elements have a value, e.g. ['0nmtTW$yz9xAz7tVFqsAH7']
+
+•on-demand 'Volume' (element/volume): 1 of 1 elements have a value, e.g. [581.84577885000760]
+
+•on-demand 'Area' (element/area): 1 of 1 elements have a value, e.g. [2476.0923260010027]
+
+•on-demand 'Phase Demolished' (element/elementid): 0 of 1 elements have a value, e.g. []

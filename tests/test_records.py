@@ -77,6 +77,17 @@ def test_display_labels_tag_clashes():
     assert lab[K_TYPE_MARK] == u"Type Mark"
 
 
+def test_display_labels_twins_use_group():
+    rs = make_set()
+    rs.add_field(Field(u"A", u"Spacing", "type", "length", group=u"Vertical Grid"))
+    rs.add_field(Field(u"B", u"Spacing", "type", "length", group=u"Horizontal Grid"))
+    rs.add_field(Field(u"C", u"Category", "type", "elementid"))
+    rs.add_field(Field(u"D", u"Category", "type", "elementid"))
+    lab = rs.display_labels()
+    assert lab[u"A"] == u"Spacing (type, Vertical Grid)" and lab[u"B"] == u"Spacing (type, Horizontal Grid)"
+    assert lab[u"C"] != lab[u"D"] and len(set(lab.values())) == len(lab)
+
+
 def test_field_roundtrip_and_validation():
     f = Field(u"G-1", u"Fire Rating", "type", "text")
     g = Field.from_dict(f.to_dict())

@@ -11,6 +11,7 @@ from pyrevit import forms, script, revit
 
 from abaco import revit_reader as rr
 from abaco.table_builder import build_table
+from abaco import pipeline
 from abaco.records import (K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA)
 
 doc = revit.doc
@@ -32,7 +33,7 @@ def _same(a, b):
     a, b = _num(a), _num(b)
     if a is None or b is None:
         return a is None and b is None
-    return abs(a - b) < 0.0051 if False else abs(a - b) < 1e-6
+    return abs(a - b) < 1e-6
 
 
 def _bucket(rs, curtain, shape):
@@ -116,6 +117,52 @@ def _compare(rs, table, curtain, out):
         out.print_md(u"- ... and %d more" % (len(bad) - 25))
 
 
+def _num_ok(a, b):
+    try:
+        return abs(float(a) - float(b)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
+def _compare_pipeline(rs, v1, curtain, out):
+    """Phase 2 check: default pipeline output (Excel table) against the v1 table, cell by cell,
+    columns matched by heading."""
+    st = pipeline.default_settings(rs, "curtain" if curtain else "standard", u"")
+    res = pipeline.build_table(rs, st)
+    new = res.excel.to_matrix()
+    tag = u"curtain" if curtain else u"standard"
+    nh, vh = new[1], v1[1]
+    same = lambda h: h.replace(u"Wall Area", u"Area")          # v1 calls it "Wall Area" on every layered table
+    nhn, vhn = [same(h) for h in nh], [same(h) for h in vh]
+    pairs = []
+    for j, h in enumerate(nhn):
+        if h in vhn:
+            pairs.append((j, vhn.index(h)))
+    only_new = [h for h in nhn if h not in vhn]
+    only_v1 = [h for h in vhn if h not in nhn]
+    out.print_md(u"**Pipeline vs v1 (%s)**: pipeline %d rows x %d cols, v1 %d rows x %d cols." % (
+        tag, len(new), len(nh), len(v1), len(vh)))
+    if only_new or only_v1:
+        out.print_md(u"- columns only in pipeline: %s | only in v1: %s" % (only_new, only_v1))
+    diffs, known = [], 0
+    for i in range(min(len(new), len(v1))):
+        for (j, k) in pairs:
+            x, y = new[i][j], v1[i][k]
+            if x == y or _num_ok(x, y):
+                continue
+            if nh[j].startswith(u"Material Area") and _num_ok(x, x) and _num_ok(y, y) and x not in (u"", 0) \
+                    and float(y) > float(x) and abs(float(y) / float(x) - round(float(y) / float(x))) < 0.01:
+                known += 1                                  # v1 counts a repeated material once per layer
+            else:
+                diffs.append(u"row %d, '%s': pipeline=%r v1=%r" % (i, nh[j], x, y))
+    out.print_md(u"- %d cell differences%s." % (
+        len(diffs), u", plus %d material-area cells that are v1 double counts" % known if known else u""))
+    for d in diffs[:15]:
+        out.print_md(u"- DIFF: %s" % d)
+    for w in res.warnings:
+        out.print_md(u"- warning: %s" % w)
+
+
 def main():
     out = script.get_output()
     cats = rr.list_model_categories(doc)
@@ -136,14 +183,19 @@ def main():
     for curtain in ([False, True] if is_walls else [False]):
         table = build_table(doc, elements, u"", curtain)
         _compare(rs, table, curtain, out)
+        _compare_pipeline(rs, table, curtain, out)
 
-    # on-demand values: first non-core field of each scope
-    extra = [f for f in rs.fields if not f.core][:3]
-    if extra:
-        missing = rr.ensure_values(doc, rs, [f.key for f in extra])
-        for f in extra:
-            sample = [rs.value(e, f.key) for e in rs.elements[:3]]
-            out.print_md(u"- on-demand '%s' (%s): first values %s" % (f.label, f.scope, sample))
+    # on-demand values: first 8 non-core fields of each scope, how many elements actually have a value
+    extra = [f for f in rs.fields if not f.core and f.scope in ("type", "element")]
+    picked = [f for f in extra if f.scope == "type"][:8] + [f for f in extra if f.scope == "element"][:8]
+    if picked:
+        missing = rr.ensure_values(doc, rs, [f.key for f in picked])
+        labels = rs.display_labels()
+        for f in picked:
+            vals = [rs.value(e, f.key) for e in rs.elements]
+            filled = [v for v in vals if v is not None]
+            out.print_md(u"- on-demand '%s' (%s/%s): %d of %d elements have a value, e.g. %s" % (
+                labels[f.key], f.scope, f.kind, len(filled), len(vals), filled[:2]))
         if missing:
             out.print_md(u"- could not read: %s" % missing)
 

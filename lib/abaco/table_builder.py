@@ -191,7 +191,8 @@ def build_table(doc, elements, title_in, curtain_mode):
             mark, name = _type_mark(typ), _type_name(typ)
             cs = _compound(typ)
             if cs is None:
-                rows.append([mark, name, u"", u"(no layers)", u"", u"", u"", g["level"]])  # e.g. stacked walls
+                rows.append([mark, name, u"", u"(no layers)", u"", u"", u"",
+                             round(g["area"], 2) if g["has_area"] else u"", g["level"]])  # e.g. stacked walls
                 continue
             for idx, layer in enumerate(cs.GetLayers()):
                 v = eid_val(layer.MaterialId)
@@ -209,7 +210,7 @@ def build_table(doc, elements, title_in, curtain_mode):
                         g["level"]])
 
         def sort_key(r):                      # layered types
-            return (_lc(r[7]), _lc(r[0]), _lc(r[1]), r[2] if isinstance(r[2], int) else 0)
+            return (_lc(r[8]), _lc(r[0]), _lc(r[1]), r[2] if isinstance(r[2], int) else 0)
 
     else:
         headers = [u"Type Mark", u"Family", u"Type Name", u"Width (m)", u"Height (m)", u"Count", level_header]
