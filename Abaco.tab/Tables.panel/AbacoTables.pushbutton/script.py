@@ -22,6 +22,8 @@ from abaco import pipeline as P
 from abaco import runner
 from abaco import ui_state as US
 from abaco import preview as PV
+from abaco import filters
+from abaco.filter_ui import FilterTab
 from abaco.layout import build_layout
 
 doc = revit.doc
@@ -36,11 +38,17 @@ CALC_TAGS = list(US.CALC_MODES)            # same order as the fmt_calc items in
 TOTAL_BG = SolidColorBrush(Color.FromRgb(0xF1, 0xF5, 0xFB))
 
 
+class NoMatch(Exception):
+    """The active filter matches no element: nothing to preview or write."""
+
+
 class AbacoWindow(WPFWindow):
     # events fire while the XAML loads, before __init__ finishes: class-level defaults keep the handlers safe
     _ready = False
     _loading = False
     _loading_fmt = False
+    filter_tab = None            # created in __init__; XAML events may fire before that
+    filter_result = None
 
     def __init__(self):
         WPFWindow.__init__(self, script.get_bundle_file("ui.xaml"))
@@ -56,6 +64,8 @@ class AbacoWindow(WPFWindow):
         self.fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
         self.suggest_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.suggest_row_click))
         self.sort_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.sort_row_click))
+        self.filter_tab = FilterTab(self.filter_list, self.filter_status, self.filter_all, self.filter_any,
+                                    on_change=self.refresh_preview)
         self.tabs.SelectionChanged += self.tabs_changed
         self._ready = True
         self.category_changed(None, None)
@@ -147,6 +157,7 @@ class AbacoWindow(WPFWindow):
         self.status(u"Reading the model...")
         self.log(u"Reading %s..." % cat.Name)
         self.rs = rr.read_category(doc, cat, self.log)
+        self.filter_tab.set_catalogue(self.rs)       # keeps the conditions on Re-read model
         for line in self.rs.summary_lines():
             self.log(line)
         self.category_info.Text = self.rs.summary_lines()[0]
@@ -154,10 +165,26 @@ class AbacoWindow(WPFWindow):
         self.bind_all()
         self.status(u"Ready")
 
+    @staticmethod
+    def _key_of(item):
+        return item.get("key") if isinstance(item, dict) else getattr(item, "key", None)
+
     def current_result(self):
         s = self.state.settings
         s["title"] = self.tb_title.Text.strip()
-        return runner.build_result(doc, self.rs, s, self.log)
+        flt = self.filter_tab.to_settings()
+        # values of every field the table, the sorting and the filter use must be loaded for ALL elements
+        # (including the ones the filter removes), because the loaded flag is shared with the filtered view
+        keys = [self._key_of(f) for f in s.get("fields", [])] + [self._key_of(x) for x in s.get("sort", [])]
+        keys += filters.needed_keys(flt)
+        rr.ensure_values(doc, self.rs, [k for k in keys if k], self.log)
+        fr = filters.apply_filters(self.rs, self.rs.elements_in_mode(self.is_curtain()), flt)
+        self.filter_result = fr
+        self.filter_tab.show_result(fr)               # per-row errors + "n of N elements match"
+        if fr.n_active and fr.matched == 0:
+            raise NoMatch()
+        rs = filters.filtered_view(self.rs, fr.kept) if fr.n_active else self.rs
+        return runner.build_result(doc, rs, s, self.log)
 
     # --------------------------------------------------------------------------- binding the lists
     def bind_all(self):
@@ -212,6 +239,10 @@ class AbacoWindow(WPFWindow):
             return
         try:
             res = self.current_result()
+        except NoMatch:
+            self.result = None
+            self.show_no_match()
+            return
         except Exception as ex:
             self.preview_status.Text = u"Cannot build the table: %s" % ex
             return
@@ -235,6 +266,17 @@ class AbacoWindow(WPFWindow):
             self._row_kinds = PV.fill_grid(self.preview_grid, res.excel)
             self.preview_status.Text = u"%d rows, %d columns%s" % (
                 res.excel.n_data_rows(), len(res.excel.columns), note)
+
+    def show_no_match(self):
+        self.preview_status.Text = u"No elements match the filter. Change or clear the conditions in the Filter tab."
+        try:
+            self.preview_grid.ItemsSource = None
+            self.preview_grid.Columns.Clear()
+            self._row_kinds = []
+            self.revit_canvas.Children.Clear()
+            self.width_ruler.Children.Clear()
+        except Exception:
+            pass
 
     def size_warning(self, lay):
         """Compare the table with the selected title block (sheet size in mm), 20 mm margins like Run."""
@@ -302,6 +344,8 @@ class AbacoWindow(WPFWindow):
             return
         self.rs = None
         self.state = None
+        if self.filter_tab is not None:
+            self.filter_tab.clear()
         walls = self._is_walls(cat)
         self.wall_mode_panel.Visibility = Visibility.Visible if walls else Visibility.Collapsed
         name, count = self.cats[self.category_combo.SelectedIndex][:2]
@@ -338,13 +382,25 @@ class AbacoWindow(WPFWindow):
 
     def field_row_click(self, sender, args):
         btn = args.OriginalSource
-        tag, row = getattr(btn, "Tag", None), getattr(btn, "DataContext", None)
-        if tag not in ("up", "down") or row is None or self.state is None:
+        while btn is not None and not isinstance(btn, Button):      # click may land on the inner text
+            btn = getattr(btn, "Parent", None)
+        if btn is None or self.state is None:
             return
-        self.state.move(row.key, -1 if tag == "up" else 1)
-        self.bind_fields()
-        self.bind_format()
-        self.refresh_preview()
+        tag, key = btn.Tag, getattr(btn.DataContext, "key", None)
+        if key is None or tag not in ("up", "down", "remove"):
+            return                                                  # e.g. the Include checkbox
+        try:
+            if tag == "remove":
+                if not self.state.remove_field(key):
+                    self.log(u"At least one field must stay in the table.")
+                    return
+            else:
+                self.state.move_field(key, -1 if tag == "up" else 1)
+            self.bind_fields()          # rebinds the list, the "x shown, y available" count and the suggestions
+            self.bind_format()          # removed field disappears from Formatting
+            self.refresh_preview()
+        except Exception as ex:
+            self.fail(ex)
 
     def suggest_row_click(self, sender, args):
         btn = args.OriginalSource
@@ -399,6 +455,19 @@ class AbacoWindow(WPFWindow):
         self.bind_format()
         self.refresh_preview()
 
+    # ------------------------------------------------------------------------------------ filter tab
+    def filter_add_click(self, sender, args):
+        if self.filter_tab is not None:
+            self.filter_tab.add()
+
+    def filter_clear_click(self, sender, args):
+        if self.filter_tab is not None:
+            self.filter_tab.clear()
+
+    def filter_match_click(self, sender, args):
+        if self._ready and self.filter_tab is not None:
+            self.filter_tab.changed()
+
     # ------------------------------------------------------------------------------ formatting tab
     def _fmt_key(self):
         row = self.format_list.SelectedItem
@@ -436,24 +505,32 @@ class AbacoWindow(WPFWindow):
             self._loading_fmt = False
 
     def _apply_format(self, **kw):
+        if not self._ready or self._loading_fmt or self.state is None:
+            return
         key = self._fmt_key()
-        if key is None or self._loading_fmt or not self._ready:
+        if key is None:
             return
         self.state.format_set(key, **kw)
         self.state.update_format_row(self.format_list.SelectedItem)
         self.refresh_preview()
 
     def fmt_heading_changed(self, sender, args):
+        if not self._ready:
+            return
         self._apply_format(heading=self.fmt_heading.Text)
 
     def orient_click(self, sender, args):
+        if not self._ready:
+            return
         self._apply_format(orientation=str(sender.Tag))
 
     def align_click(self, sender, args):
+        if not self._ready:
+            return
         self._apply_format(align=str(sender.Tag))
 
     def fmt_width_changed(self, sender, args):
-        if self._loading_fmt or self.fmt_auto.IsChecked:
+        if not self._ready or self._loading_fmt or self.fmt_auto.IsChecked:
             return
         try:
             w = US.parse_decimal(self.fmt_width.Text)
@@ -463,7 +540,7 @@ class AbacoWindow(WPFWindow):
             self._apply_format(widthMm=w)
 
     def fmt_auto_click(self, sender, args):
-        if self._loading_fmt:
+        if not self._ready or self._loading_fmt or self.state is None:
             return
         if self.fmt_auto.IsChecked:
             self.fmt_width.IsEnabled = False
@@ -485,11 +562,15 @@ class AbacoWindow(WPFWindow):
         self._apply_format(widthMm=w)
 
     def fmt_calc_changed(self, sender, args):
+        if not self._ready or self._loading_fmt:         # fires while the XAML loads (SelectedIndex="0")
+            return
         item = self.fmt_calc.SelectedItem
         if item is not None:
             self._apply_format(calc=str(item.Tag))
 
     def fmt_flag_click(self, sender, args):
+        if not self._ready:
+            return
         self._apply_format(hiddenInRevit=bool(self.fmt_hidden.IsChecked),
                            showInExcel=bool(self.fmt_excel.IsChecked))
 
@@ -536,8 +617,19 @@ class AbacoWindow(WPFWindow):
         self.status(u"Running...")
         if self.rs is None:
             self.load_model()
-        res = self.current_result()
+        self.filter_tab.flush()                        # pending typing in a filter value
+        try:
+            res = self.current_result()
+        except NoMatch:
+            forms.alert(u"No elements match the filter, so there is nothing to write.\n"
+                        u"Change or clear the conditions in the Filter tab.", title="Abaco Tables")
+            self.status(u"Nothing written: the filter matches no element")
+            return
         self.result = res
+        for w in self.filter_result.warnings:
+            self.log(u"Warning: %s" % w)
+        if self.filter_result.n_active:
+            self.log(self.filter_result.summary())
         for w in res.warnings:
             self.log(u"Warning: %s" % w)
         ok = []

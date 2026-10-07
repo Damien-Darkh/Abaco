@@ -547,6 +547,7 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
                                                         <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"
@@ -561,6 +562,8 @@
                                                                 ToolTip="Move up"/>
                                                         <Button Grid.Column="5" Tag="down" Content="↓" Style="{StaticResource MiniButton}"
                                                                 ToolTip="Move down"/>
+                                                        <Button Grid.Column="6" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Remove from table"/>
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -598,6 +601,72 @@
                                 </Grid>
                             </TabItem>
 
+                            <!-- Filter -->
+                            <TabItem Header="Filter" Style="{StaticResource LineTab}">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="12,10,12,12">
+                                        <DockPanel Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
+                                                    Click="filter_clear_click" VerticalAlignment="Center"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Filter by"/>
+                                        </DockPanel>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Match" Margin="0,0,8,0"/>
+                                            <RadioButton x:Name="filter_all" GroupName="fmatch" Style="{StaticResource Seg}"
+                                                        Content="All (AND)" IsChecked="True" Click="filter_match_click"/>
+                                            <RadioButton x:Name="filter_any" GroupName="fmatch" Style="{StaticResource Seg}"
+                                                        Content="Any (OR)" Click="filter_match_click"/>
+                                        </StackPanel>
+
+                                        <ItemsControl x:Name="filter_list">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border BorderBrush="{StaticResource LineSoft}" BorderThickness="0,0,0,1" Padding="0,6,0,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="24"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="28"/>
+                                                                <RowDefinition Height="28"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                            </Grid.RowDefinitions>
+                                                            <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
+                                                                    HorizontalAlignment="Left" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
+                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Border>
+                                                            <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
+                                                                    SelectedItem="{Binding Column, Mode=TwoWay}"/>
+                                                            <Button Grid.Column="2" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                                                                    ToolTip="Remove condition"/>
+                                                            <ComboBox Grid.Row="1" Grid.Column="1" Height="24" Margin="0,4,0,0"
+                                                                    ItemsSource="{Binding Operators}"
+                                                                    SelectedItem="{Binding Operator, Mode=TwoWay}"/>
+                                                            <TextBox Grid.Row="1" Grid.Column="2" Width="110" Height="24" Margin="6,4,0,0"
+                                                                    Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                    Visibility="{Binding NeedsValue, Converter={StaticResource B2V}}"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource Hint}"
+                                                                    Foreground="{StaticResource WarnText}" Text="{Binding Error}"
+                                                                    Visibility="{Binding HasError, Converter={StaticResource B2V}}"/>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <Button Content="+ Add condition" Style="{StaticResource SecondaryButton}" Padding="12,4"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0" Click="filter_add_click"/>
+
+                                        <TextBlock x:Name="filter_status" Style="{StaticResource Hint}" Margin="0,10,0,0"/>
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                                Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </TabItem>
                             <!-- Sorting / Grouping -->
                             <TabItem Header="Sorting / Grouping" Style="{StaticResource LineTab}">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
