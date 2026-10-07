@@ -384,14 +384,6 @@
                             <StackPanel>
                                 <TextBlock Style="{StaticResource CardTitle}" Text="1 · Source"/>
                                 <Grid>
-                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Table type"/>
-                                    <ComboBox x:Name="table_type_combo" Grid.Row="0" Grid.Column="1" SelectedIndex="0"
-                                            SelectionChanged="table_type_changed">
-                                        <ComboBoxItem Content="Schedule / Quantities"/>
-                                        <ComboBoxItem Content="Material takeoff"/>
-                                    </ComboBox>
-                                    <TextBlock x:Name="table_type_note" Grid.Row="1" Grid.Column="1" Style="{StaticResource Hint}"
-                                            Margin="0,3,0,0" Text="One row per type and level (and size): count, length, height, area."/>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170"/>
                                         <ColumnDefinition Width="*"/>
@@ -400,14 +392,26 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Category"/>
-                                    <ComboBox x:Name="category_combo" Grid.Row="0" Grid.Column="1"
-                                              SelectionChanged="category_changed"/>
-                                    <TextBlock x:Name="category_info" Grid.Row="1" Grid.Column="1"
-                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
-                                    <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
-                                               Text="To limit the table (for example curtain walls only) use the Filter tab in Preview."/>
+
+                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Table type"/>
+                                    <ComboBox x:Name="table_type_combo" Grid.Row="0" Grid.Column="1" SelectedIndex="0"
+                                            SelectionChanged="table_type_changed">
+                                        <ComboBoxItem Content="Schedule / Quantities"/>
+                                        <ComboBoxItem Content="Material takeoff"/>
+                                    </ComboBox>
+                                    <TextBlock x:Name="table_type_note" Grid.Row="1" Grid.Column="1" Style="{StaticResource Hint}"
+                                            Margin="0,3,0,8" Text="One row per type and level (and size): count, length, height, area."/>
+
+                                    <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Category"/>
+                                    <ComboBox x:Name="category_combo" Grid.Row="2" Grid.Column="1"
+                                            SelectionChanged="category_changed"/>
+                                    <TextBlock x:Name="category_info" Grid.Row="3" Grid.Column="1"
+                                            Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                            Text="To limit the table (for example curtain walls only) use the Filter tab in Preview."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -648,7 +652,13 @@
                                             <RadioButton x:Name="filter_any" GroupName="fmatch" Style="{StaticResource Seg}"
                                                         Content="Any (OR)" Click="filter_match_click"/>
                                         </StackPanel>
-
+                                        <StackPanel x:Name="filter_quick" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Quick" Margin="0,0,8,0"/>
+                                            <Button Content="Curtain walls only" Style="{StaticResource LinkButton}" Margin="0,0,12,0"
+                                                    Click="filter_curtain_only_click"/>
+                                            <Button Content="Exclude curtain walls" Style="{StaticResource LinkButton}"
+                                                    Click="filter_no_curtain_click"/>
+                                        </StackPanel>
                                         <ItemsControl x:Name="filter_list">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -694,13 +704,6 @@
                                         <TextBlock x:Name="filter_status" Style="{StaticResource Hint}" Margin="0,10,0,0"/>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
                                                 Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="filter_quick" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
-                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Quick" Margin="0,0,8,0"/>
-                                        <Button Content="Curtain walls only" Style="{StaticResource LinkButton}" Margin="0,0,12,0"
-                                                Click="filter_curtain_only_click"/>
-                                        <Button Content="Exclude curtain walls" Style="{StaticResource LinkButton}"
-                                                Click="filter_no_curtain_click"/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
@@ -772,21 +775,35 @@
                                             <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort by (inside each group)"/>
                                         </DockPanel>
                                         <ItemsControl x:Name="sort_list">
-                                            <!-- same ItemTemplate as group_list above (badge, combo, A→Z toggle, remove); no gap checkbox -->
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Height="32">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="24"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
+                                                                HorizontalAlignment="Left">
+                                                            <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
+                                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        </Border>
+                                                        <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
+                                                                SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
+                                                        <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
+                                                                    IsChecked="{Binding Descending, Mode=TwoWay}"
+                                                                    ToolTip="Click to switch ascending / descending"/>
+                                                        <Button Grid.Column="3" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Remove level"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <StackPanel Orientation="Horizontal" Height="26">
-                                            <Border Width="16" Height="16" CornerRadius="8" Background="#8A93A3">
-                                                <TextBlock x:Name="sort_fixed_index" Text="1" Foreground="White" FontSize="10"
-                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            </Border>
-                                            <TextBlock Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                    Text="then by layer Order (fixed, Material takeoff: keeps the build-up in sequence)"/>
-                                        </StackPanel>
-                                        <Button Content="+ Add level" Style="{StaticResource SecondaryButton}" Padding="12,4"
-                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="sort_add_click"/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
+                                        
 
                             <!-- Formatting -->
                             <TabItem Header="Formatting" Style="{StaticResource LineTab}">

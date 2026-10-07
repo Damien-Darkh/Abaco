@@ -442,7 +442,7 @@ def _calc_rows(data_rows, cols, grand, labels):
     return out
 
 
-def add_calculations(blocks, cols, grand_totals, labels):
+def add_calculations(blocks, cols, grand_totals, labels, group_totals=True):
     if not any(c.calc != "none" for c in cols):
         return blocks
     out = []
