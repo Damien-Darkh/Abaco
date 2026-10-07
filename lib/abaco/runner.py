@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Glue between the window and the new data / pipeline / output layers (Phase 3).
+"""Glue between the window and the data / pipeline / output layers.
 
-build()        model -> records -> pipeline -> Result (excel table + revit table)
-draw_revit()   Result -> layout -> drafting views and sheets (call inside an open transaction)
-write_excel()  Result -> Excel tab
-
-Phase 4 replaces the 'hidden' text box with per-field settings; until then build() maps the v1 text box
-('Wall Type Name;Order;Function') onto the Hidden-in-Revit flag of the fields with that heading.
+build_result()  records + the window's settings -> Result (excel table + revit table)
+draw_revit()    Result -> layout -> drafting views and sheets (call inside an open transaction)
+write_excel()   Result -> Excel tab
+build()         v1-style one-shot (default settings + the old hidden-columns text); kept for the dev buttons
 """
 from abaco import revit_reader
 from abaco import pipeline
@@ -21,8 +19,13 @@ def build(doc, category, curtain, title, hidden_text, log=None):
     rs = revit_reader.read_category(doc, category, log)
     settings = pipeline.default_settings(rs, "curtain" if curtain else "standard", title or u"")
     pipeline.apply_hidden_headings(rs, settings, hidden_text)
+    return rs, build_result(doc, rs, settings, log)
+
+
+def build_result(doc, rs, settings, log=None):
+    """Loads the values of every field the settings use (cached), then runs the pipeline."""
     revit_reader.ensure_values(doc, rs, pipeline.required_keys(settings), log)
-    return rs, pipeline.build_table(rs, settings)
+    return pipeline.build_table(rs, settings)
 
 
 def draw_revit(doc, result, name, prefix, text_mm, page_h_mm, title_block):

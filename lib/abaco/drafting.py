@@ -1,16 +1,24 @@
 # -*- coding: utf-8 -*-
 """Draw a TableLayout as drafting views (+ sheets on the first run).
 
-Port of the second half of the Dynamo "Revit table" node (3436a1).
+Phase 3: text alignment (explicit box width), 90 degree vertical headings, bold type for
+titles, headings and total rows. Reads the text tuples produced by layout.build_layout:
+    (kind, text, x, y, width_or_None, align, rotation_deg)
 Must be called inside an open Revit transaction.
 """
 import re
+import math
 import clr
 clr.AddReference("RevitAPI")
 import Autodesk.Revit.DB as DB
 from System.Collections.Generic import List
 
 from abaco.layout import MM
+
+_BOLD_KINDS = ("title", "head", "total")
+_ALIGN = {"left": DB.HorizontalTextAlignment.Left,
+          "center": DB.HorizontalTextAlignment.Center,
+          "right": DB.HorizontalTextAlignment.Right}
 
 
 def _unique(base, existing):
@@ -45,19 +53,43 @@ def _clear_view(doc, view):
         doc.Delete(ids)
 
 
+def _clamp_width(doc, type_id, w_ft):
+    """Revit rejects text-note widths outside the type's allowed range."""
+    try:
+        lo = DB.TextNote.GetMinimumAllowedWidth(doc, type_id)
+        hi = DB.TextNote.GetMaximumAllowedWidth(doc, type_id)
+        return min(max(w_ft, lo), hi)
+    except Exception:
+        return w_ft
+
+
+def _origin_x(x, w, align):
+    """Revit anchors a text note at the edge that matches its alignment (left edge, middle, right edge).
+    layout gives the LEFT edge of the box and its width, so centre / right notes need the origin moved."""
+    if w is None:
+        return x
+    if align == "center":
+        return x + w / 2.0
+    if align == "right":
+        return x + w
+    return x
+
+
 def _draw(doc, view, page, t_norm, t_bold):
     for (x0, y0, x1, y1) in page.lines:
         doc.Create.NewDetailCurve(
             view, DB.Line.CreateBound(DB.XYZ(x0 * MM, y0 * MM, 0), DB.XYZ(x1 * MM, y1 * MM, 0)))
-    for kind, txt, x, y, w in page.texts:
-        tid = t_bold.Id if kind in ("title", "head") else t_norm.Id
+    for kind, txt, x, y, w, align, rot in page.texts:
+        tid = t_bold.Id if kind in _BOLD_KINDS else t_norm.Id
         opts = DB.TextNoteOptions(tid)
-        if kind == "title":
-            opts.HorizontalAlignment = DB.HorizontalTextAlignment.Center
-            DB.TextNote.Create(doc, view.Id, DB.XYZ(x * MM, y * MM, 0), w * MM, txt, opts)
+        opts.HorizontalAlignment = _ALIGN.get(align, DB.HorizontalTextAlignment.Left)
+        if rot:
+            opts.Rotation = math.radians(rot)         # radians; 90 reads bottom to top
+        pos = DB.XYZ(_origin_x(x, w, align) * MM, y * MM, 0)
+        if w is not None and not rot:
+            DB.TextNote.Create(doc, view.Id, pos, _clamp_width(doc, tid, w * MM), txt, opts)
         else:
-            opts.HorizontalAlignment = DB.HorizontalTextAlignment.Left
-            DB.TextNote.Create(doc, view.Id, DB.XYZ(x * MM, y * MM, 0), txt, opts)
+            DB.TextNote.Create(doc, view.Id, pos, txt, opts)
 
 
 def build_tables(doc, layout, sheet_name, number_prefix, text_mm, title_block=None):

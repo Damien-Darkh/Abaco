@@ -1,0 +1,4 @@
+title: "Phase 3\ncheck"
+tooltip: "Temporary dev button: draws and writes one category with varied alignment, vertical heading and totals. Run in a test copy of the project."
+author: "Abaco"
+min_revit_version: 2024

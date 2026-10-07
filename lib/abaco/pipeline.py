@@ -14,6 +14,8 @@ Default settings per template (layered / curtain / simple) reproduce the v1 tabl
 The values of every field the settings use must be loaded first: revit_reader.ensure_values(doc, rs,
 required_keys(settings)).
 """
+import re
+
 from abaco.records import (
     K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID, K_COUNT,
     K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA)
@@ -102,6 +104,25 @@ def required_keys(settings):
     return keys
 
 
+def _norm_heading(v):
+    return re.sub(r"\s+", " ", _s(v) if v else u"").strip().lower()
+
+
+def apply_hidden_headings(rs, settings, text):
+    """Set hiddenInRevit from a ';' or ',' separated list of headings (the v1 'hidden columns' box).
+    A field matches by its heading in the settings or by its catalogue label, case-insensitive.
+    Everything not listed is shown. Type Mark is never hidden."""
+    wanted = set(_norm_heading(x) for x in re.split(r"[;,]", _s(text) if text else u"") if x.strip())
+    for st in settings.get("fields", []):
+        f = rs.field(st["key"])
+        names = set([_norm_heading(st.get("heading"))])
+        if f is not None:
+            names.add(_norm_heading(f.label))
+        names.discard(u"")
+        st["hiddenInRevit"] = bool(wanted & names) and st["key"] != K_TYPE_MARK
+    return settings
+
+
 # ----------------------------------------------------------------------------------------------- model
 class ColumnSpec(object):
     def __init__(self, field, st):
@@ -143,25 +164,36 @@ class Table(object):
     def n_data_rows(self):
         return sum(1 for b in self.blocks for r in b if r.kind == ROW_DATA)
 
+    def _label_index(self):
+        """Column that carries the 'Total' / 'Min' / 'Max' label: the first one without a calculation."""
+        calc_keys = set(c.key for c in self.columns if c.calc != "none")
+        for i, c in enumerate(self.columns):
+            if c.key not in calc_keys:
+                return i
+        return None
+
+    def _line(self, r, label_idx):
+        line = [(u"" if r.cells.get(c.key) is None else r.cells.get(c.key)) for c in self.columns]
+        if r.kind in CALC_ROW_KINDS and label_idx is not None:
+            line[label_idx] = r.label or u""
+        return line
+
+    def rendered_blocks(self):
+        """Blocks of (row kind, [cell per column]) with the total labels already in place.
+        Used by the Revit layout (and so by the preview). None -> u''."""
+        li = self._label_index()
+        return [[(r.kind, self._line(r, li)) for r in block] for block in self.blocks]
+
     def to_matrix(self):
         """v1 layout: title row, heading row, blocks separated by one blank row. None -> u''."""
-        cols = self.columns
-        n = len(cols)
-        calc_keys = set(c.key for c in cols if c.calc != "none")
-        label_idx = None
-        for i, c in enumerate(cols):
-            if c.key not in calc_keys:
-                label_idx = i
-                break
-        m = [[self.title] + [u""] * (n - 1), [c.heading for c in cols]]
+        n = len(self.columns)
+        li = self._label_index()
+        m = [[self.title] + [u""] * (n - 1), [c.heading for c in self.columns]]
         for bi, block in enumerate(self.blocks):
             if bi:
                 m.append([u""] * n)
             for r in block:
-                line = [(u"" if r.cells.get(c.key) is None else r.cells.get(c.key)) for c in cols]
-                if r.kind in CALC_ROW_KINDS and label_idx is not None:
-                    line[label_idx] = r.label or u""
-                m.append(line)
+                m.append(self._line(r, li))
         return m
 
 
