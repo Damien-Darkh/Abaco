@@ -395,7 +395,7 @@ class AbacoWindow(WPFWindow):
                     self.log(u"At least one field must stay in the table.")
                     return
             else:
-                self.state.move_field(key, -1 if tag == "up" else 1)
+                self.state.move(key, -1 if tag == "up" else 1)
             self.bind_fields()          # rebinds the list, the "x shown, y available" count and the suggestions
             self.bind_format()          # removed field disappears from Formatting
             self.refresh_preview()

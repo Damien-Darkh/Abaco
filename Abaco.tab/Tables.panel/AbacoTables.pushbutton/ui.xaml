@@ -525,16 +525,19 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
 
+                                    <!-- Fields list header -->
                                     <DockPanel Grid.Row="0" Margin="0,0,0,6">
                                         <Button DockPanel.Dock="Right" Content="Reset" Style="{StaticResource LinkButton}"
                                                 Click="fields_reset_click" VerticalAlignment="Center"/>
                                         <TextBlock x:Name="fields_count" DockPanel.Dock="Right" Style="{StaticResource Hint}"
-                                                   Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                                Margin="0,0,12,0" VerticalAlignment="Center"/>
                                         <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Table fields"/>
                                     </DockPanel>
 
+                                    <!-- Fields list (scrollable) -->
                                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                                         <ItemsControl x:Name="fields_list">
                                             <ItemsControl.ItemTemplate>
@@ -551,9 +554,9 @@
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
                                                         <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"
-                                                                  ToolTip="Show this field in the table"/>
+                                                                ToolTip="Show this field in the table"/>
                                                         <TextBlock Grid.Column="2" Text="{Binding Label}" VerticalAlignment="Center"
-                                                                   TextTrimming="CharacterEllipsis"/>
+                                                                TextTrimming="CharacterEllipsis"/>
                                                         <Border Grid.Column="3" Style="{StaticResource ChipInfo}"
                                                                 Visibility="{Binding HasScope, Converter={StaticResource B2V}}">
                                                             <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
@@ -570,12 +573,31 @@
                                         </ItemsControl>
                                     </ScrollViewer>
 
-                                    <StackPanel Grid.Row="2" Margin="0,10,0,0">
-                                        <Separator Margin="0,0,0,8" Background="{StaticResource LineSoft}"/>
-                                        <TextBlock Style="{StaticResource CardTitle}" Text="Add parameter"/>
-                                        <TextBox x:Name="tb_param_search" TextChanged="param_search_changed"
-                                                 ToolTip="Search the parameters found on this category"/>
-                                        <ScrollViewer Height="120" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                    <!-- Draggable splitter -->
+                                    <GridSplitter Grid.Row="2" Height="2" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                                                Background="{StaticResource LineSoft}" Cursor="SizeNS"
+                                                Margin="0,4,0,4" ShowsPreview="True"/>
+
+                                    <!-- Add parameter section (scrollable) -->
+                                    <Grid Grid.Row="3">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0"
+                                                Style="{StaticResource CardTitle}"
+                                                Text="Add parameter"/>
+
+                                        <TextBox Grid.Row="1"
+                                                x:Name="tb_param_search"
+                                                TextChanged="param_search_changed"
+                                                ToolTip="Search the parameters found on this category"/>
+
+                                        <ScrollViewer Grid.Row="2"
+                                                    VerticalScrollBarVisibility="Auto"
+                                                    Margin="0,4,0,0">
                                             <ItemsControl x:Name="suggest_list">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
@@ -585,19 +607,29 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
-                                                                       TextTrimming="CharacterEllipsis"/>
-                                                            <Border Grid.Column="1" Style="{StaticResource ChipInfo}">
-                                                                <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
+
+                                                            <TextBlock Text="{Binding Label}"
+                                                                    VerticalAlignment="Center"
+                                                                    TextTrimming="CharacterEllipsis"/>
+
+                                                            <Border Grid.Column="1"
+                                                                    Style="{StaticResource ChipInfo}">
+                                                                <TextBlock Style="{StaticResource ChipText}"
+                                                                        Text="{Binding ScopeText}"/>
                                                             </Border>
-                                                            <Button Grid.Column="2" Tag="add" Content="+" Style="{StaticResource MiniButton}"
+
+                                                            <Button Grid.Column="2"
+                                                                    Tag="add"
+                                                                    Content="+"
+                                                                    Style="{StaticResource MiniButton}"
                                                                     ToolTip="Add to table"/>
                                                         </Grid>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
                                         </ScrollViewer>
-                                    </StackPanel>
+                                    </Grid>
+
                                 </Grid>
                             </TabItem>
 
@@ -667,6 +699,7 @@
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
+                            
                             <!-- Sorting / Grouping -->
                             <TabItem Header="Sorting / Grouping" Style="{StaticResource LineTab}">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">

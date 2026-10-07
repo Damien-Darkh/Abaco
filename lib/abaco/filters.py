@@ -15,7 +15,6 @@ A condition is in one of three states:
 
 Common-subset Python (IronPython 2.7 / 3.4 / CPython 3): no f-strings.
 """
-import copy
 import re
 
 MATCH_ALL = "all"
@@ -214,12 +213,3 @@ def apply_filters(rs, elements, settings):
         if (all(res) if match_all else any(res)):
             kept.append(er)
     return FilterResult(kept, len(elements), errors, len(active), incomplete)
-
-
-def filtered_view(rs, kept):
-    """A RecordSet that only holds the kept elements. Types, field catalogue and loaded_keys are SHARED with
-    `rs` (shallow copy), so the pipeline runs unchanged on it and values read later are cached on the real
-    records. Call revit_reader.ensure_values() on the full `rs` first (values of excluded elements too)."""
-    view = copy.copy(rs)
-    view.elements = list(kept)
-    return view

@@ -187,11 +187,14 @@ class EditState(object):
 
     # ---- fields
     def field_rows(self, on_change=None):
+        """Only show fields that are set to appear somewhere (Hidden=false OR Excel=true)."""
         rows = []
         for st in self.settings["fields"]:
             key = st["key"]
             lab = self.label(key) if self.rs.field(key) is not None else u"%s (not found)" % (st.get("heading") or key)
-            rows.append(FieldRow(key, lab, st.get("include", True), self._scope_text(key), on_change))
+            # Include only if visible in at least one output
+            if not (st.get("hiddenInRevit") and not st.get("showInExcel", True)):
+                rows.append(FieldRow(key, lab, True, self._scope_text(key), on_change))
         return rows
 
     def counts(self):
@@ -206,6 +209,17 @@ class EditState(object):
             return False
         fl[i], fl[j] = fl[j], fl[i]
         return True
+
+    def remove_field(self, key):
+        """Remove a field from the table. Returns False if it's the last one."""
+        fl = self.settings["fields"]
+        if len([s for s in fl if s.get("include", True)]) <= 1:
+            return False
+        for i, s in enumerate(fl):
+            if s["key"] == key:
+                del fl[i]
+                return True
+        return False
 
     def set_include(self, key, value):
         st = self._st(key)
@@ -239,7 +253,10 @@ class EditState(object):
 
     # ---- sorting
     def sort_columns(self):
-        return sorted(self.labels.values(), key=lambda s: s.lower())
+        """Offer all fields, not just the ones in the table."""
+        return sorted([self.label(f.key) for f in self.rs.fields 
+                    if self.rs.field(f.key) is not None], 
+                    key=lambda s: s.lower())
 
     def sort_rows(self, on_change=None):
         cols = self.sort_columns()
