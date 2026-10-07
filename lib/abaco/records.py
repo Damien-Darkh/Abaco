@@ -34,6 +34,7 @@ K_LAYER_MATERIAL = "@LAYER_MATERIAL"
 K_LAYER_THICKNESS = "@LAYER_THICKNESS"
 K_LAYER_FUNCTION = "@LAYER_FUNCTION"
 K_LAYER_AREA = "@LAYER_AREA"       # material area, taken from ElementRecord.material_areas
+K_IS_CURTAIN = "@IS_CURTAIN" 
 
 M2 = u"m\u00b2"
 
@@ -70,7 +71,7 @@ class Field(object):
 
 def core_fields(is_walls=False):
     """The built-in fields of v1 (always present). Labels match the v1 headings exactly."""
-    return [
+    fields = [
         Field(K_TYPE_MARK, u"Type Mark", "type", "text", core=True),
         Field(K_TYPE_NAME, u"Wall Type Name" if is_walls else u"Type Name", "type", "text", core=True),
         Field(K_FAMILY, u"Family", "type", "text", core=True),
@@ -87,6 +88,11 @@ def core_fields(is_walls=False):
         Field(K_COUNT, u"Count", "group", "integer", core=True),
         Field(K_ELEMENT_ID, u"Element Id", "element", "integer", core=True),
     ]
+
+    if is_walls:
+        fields.insert(3, Field(K_IS_CURTAIN, u"Curtain Wall", "type", "yesno", core=True))
+    return fields
+
 
 
 class Layer(object):
@@ -109,6 +115,7 @@ class TypeRecord(object):
         self.values = values if values is not None else {}
         self.layers = layers                # None = no compound structure (stacked wall, door, ...)
         self.is_curtain = is_curtain
+        self.values[K_IS_CURTAIN] = u"Yes" if is_curtain else u"No"
 
     @property
     def is_layered(self):

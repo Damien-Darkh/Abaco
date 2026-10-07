@@ -127,16 +127,18 @@ class SuggestRow(object):
 class SortRow(Observable):
     Column = _bind("Column")
     Descending = _bind("Descending")
-    GapRow = _bind("GapRow")
 
-    def __init__(self, index, columns, column, descending, gap, on_change=None):
+    def __init__(self, index, columns, column, descending, on_change=None):
         Observable.__init__(self)
-        self.Index = index                  # 1-based, shown in the badge
+        self.Index = index
         self.Columns = columns
         self._Column = column
         self._Descending = bool(descending)
-        self._GapRow = bool(gap)
         self.on_change = on_change
+
+
+class GroupRow(SortRow):
+    pass
 
 
 class FormatRow(Observable):
@@ -184,6 +186,13 @@ class EditState(object):
         if f is None or f.core:
             return u""
         return SCOPE_TEXT.get(f.scope, u"")
+
+    def _usable(self, f):
+        return f.scope != "layer" or P.effective_type(self.rs, self.settings) == "takeoff"
+
+    def counts(self):
+        shown = sum(1 for st in self.settings["fields"] if st.get("include", True))
+        return shown, sum(1 for f in self.rs.fields if self._usable(f))
 
     # ---- fields
     def field_rows(self, on_change=None):
@@ -242,6 +251,7 @@ class EditState(object):
         used = set(s["key"] for s in self.settings["fields"])
         out = []
         for f in self.rs.fields:
+            if not self._usable(f): continue
             if f.key in used:
                 continue
             lab = self.label(f.key)
@@ -253,10 +263,8 @@ class EditState(object):
 
     # ---- sorting
     def sort_columns(self):
-        """Offer all fields, not just the ones in the table."""
-        return sorted([self.label(f.key) for f in self.rs.fields 
-                    if self.rs.field(f.key) is not None], 
-                    key=lambda s: s.lower())
+        return sorted([self.label(f.key) for f in self.rs.fields if self._usable(f)],
+                      key=lambda s: s.lower())
 
     def sort_rows(self, on_change=None):
         cols = self.sort_columns()
@@ -288,6 +296,43 @@ class EditState(object):
 
     def sort_clear(self):
         self.settings["sort"] = []
+
+
+    # ---- sorting and grouping: two lists with the same shape
+    def _level_rows(self, name, cls, on_change):
+        cols = self.sort_columns()
+        return [cls(i + 1, cols, self.label(s["key"]), s.get("dir") == "desc", on_change)
+                for i, s in enumerate(self.settings.setdefault(name, []))]
+
+    def _level_set(self, name, index0, label=None, descending=None):
+        s = self.settings[name][index0]
+        if label is not None and label in self._by_label:
+            s["key"] = self._by_label[label]
+        if descending is not None:
+            s["dir"] = "desc" if descending else "asc"
+
+    def _level_add(self, name):
+        used = set(s["key"] for n in ("group", "sort") for s in self.settings.get(n, []))
+        key = None
+        for st in self.settings["fields"]:
+            if st.get("include", True) and st["key"] not in used and self.rs.field(st["key"]) is not None:
+                key = st["key"]
+                break
+        if key is None:
+            key = K_TYPE_MARK if self.rs.field(K_TYPE_MARK) is not None else self.rs.fields[0].key
+        self.settings.setdefault(name, []).append(P.sort_setting(key))
+
+    def sort_rows(self, on_change=None):   return self._level_rows("sort", SortRow, on_change)
+    def group_rows(self, on_change=None):  return self._level_rows("group", GroupRow, on_change)
+    def sort_set(self, i, label=None, descending=None):   self._level_set("sort", i, label, descending)
+    def group_set(self, i, label=None, descending=None):  self._level_set("group", i, label, descending)
+    def sort_add(self):      self._level_add("sort")
+    def group_add(self):     self._level_add("group")
+    def sort_remove(self, i):   del self.settings["sort"][i]
+    def group_remove(self, i):  del self.settings["group"][i]
+    def sort_clear(self):    self.settings["sort"] = []
+    def group_clear(self):   self.settings["group"] = []
+
 
     # ---- formatting
     def heading(self, key):

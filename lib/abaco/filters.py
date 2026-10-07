@@ -213,3 +213,13 @@ def apply_filters(rs, elements, settings):
         if (all(res) if match_all else any(res)):
             kept.append(er)
     return FilterResult(kept, len(elements), errors, len(active), incomplete)
+
+def filtered_view(rs, kept):
+    """A RecordSet that shares everything with `rs` (catalogue, types, loaded flags) but whose
+    elements are only the ones that passed the filter. The original is never modified, and values
+    loaded later on `rs` are visible through the view because loaded_keys and the records are shared."""
+    from abaco.records import RecordSet
+    v = RecordSet.__new__(RecordSet)
+    v.__dict__.update(rs.__dict__)      # same fields, _fields, types, loaded_keys, notes, category info
+    v.elements = list(kept)             # only the matching elements
+    return v

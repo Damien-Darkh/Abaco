@@ -18,7 +18,7 @@ import re
 
 from abaco.records import (
     K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID, K_COUNT,
-    K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA)
+    K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA, K_IS_CURTAIN)
 
 try:
     _STR = (basestring,)
@@ -50,59 +50,61 @@ def field_setting(key, **kw):
     return d
 
 
-def sort_setting(key, direction="asc", gap=False):
-    return {"key": key, "dir": direction, "gap": gap}
+TABLE_TYPES = ("schedule", "takeoff")
 
 
-def detect_shape(rs, mode):
-    """'curtain' | 'layered' | 'simple' - same decision as v1 (any layered type makes the table layered)."""
-    if mode == "curtain":
-        return "curtain"
-    for e in rs.elements_in_mode(False):
-        if rs.types[e.type_id].is_layered:
-            return "layered"
-    return "simple"
+def is_walls(rs):
+    return rs.has_field(K_IS_CURTAIN)
 
 
-def default_settings(rs, mode="standard", title=u""):
-    """Template defaults = the v1 table (fields, sort, blocks, columns hidden in Revit)."""
-    shape = detect_shape(rs, mode)
-    if shape == "layered":
+def effective_type(rs, settings):
+    """'takeoff' needs layered types (walls, floors, roofs, ceilings); otherwise it is a schedule."""
+    if settings.get("tableType") == "takeoff" and rs.has_layered:
+        return "takeoff"
+    return "schedule"
+
+
+def sort_setting(key, direction="asc"):
+    return {"key": key, "dir": direction}
+
+
+def default_settings(rs, table_type="schedule", title=u""):
+    ttype = effective_type(rs, {"tableType": table_type})
+    walls = is_walls(rs)
+    if ttype == "takeoff":
         keys = [K_TYPE_MARK, K_TYPE_NAME, K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS,
-                K_LAYER_FUNCTION, K_LAYER_AREA, K_AREA, K_LEVEL]       # K_AREA = "Wall Area" of the group
-        sort = [sort_setting(K_LEVEL, gap=True), sort_setting(K_TYPE_MARK, gap=True),
-                sort_setting(K_TYPE_NAME)]
-    elif shape == "curtain":
+                K_LAYER_FUNCTION, K_LAYER_AREA, K_AREA, K_LEVEL]
+        group, sort = [K_LEVEL, K_TYPE_MARK], [K_TYPE_NAME]
+    elif walls:
         keys = [K_TYPE_MARK, K_TYPE_NAME, K_COUNT, K_LENGTH, K_HEIGHT, K_AREA, K_LEVEL]
-        sort = [sort_setting(K_LEVEL, gap=True), sort_setting(K_TYPE_MARK, gap=True),
-                sort_setting(K_TYPE_NAME), sort_setting(K_HEIGHT)]
+        group, sort = [K_LEVEL, K_TYPE_MARK], [K_TYPE_NAME, K_HEIGHT]
+    elif rs.has_layered:                                   # floors, roofs, ceilings
+        keys = [K_TYPE_MARK, K_TYPE_NAME, K_COUNT, K_AREA, K_LEVEL]
+        group, sort = [K_LEVEL, K_TYPE_MARK], [K_TYPE_NAME]
     else:
         keys = [K_TYPE_MARK, K_FAMILY, K_TYPE_NAME, K_WIDTH, K_HEIGHT, K_COUNT, K_LEVEL]
-        sort = [sort_setting(K_LEVEL, gap=True), sort_setting(K_TYPE_MARK, gap=True),
-                sort_setting(K_FAMILY), sort_setting(K_TYPE_NAME),
-                sort_setting(K_WIDTH), sort_setting(K_HEIGHT)]
-    hidden = set([K_LAYER_ORDER, K_LAYER_FUNCTION])          # v1 default: "Wall Type Name;Order;Function"
-    f = rs.field(K_TYPE_NAME)
-    if f is not None and f.label == u"Wall Type Name":
-        hidden.add(K_TYPE_NAME)
-    is_walls = f is not None and f.label == u"Wall Type Name"
+        group, sort = [K_LEVEL, K_TYPE_MARK], [K_FAMILY, K_TYPE_NAME, K_WIDTH, K_HEIGHT]
+    hidden = set()
+    if ttype == "takeoff":
+        hidden |= set([K_LAYER_ORDER, K_LAYER_FUNCTION])
+    if walls:
+        hidden.add(K_TYPE_NAME)                            # v1 default hidden columns
     fields = []
     for k in keys:
         extra = {}
-        if k == K_AREA and shape == "layered" and is_walls:
-            extra["heading"] = u"Wall Area (m\u00b2)"                # v1 heading
+        if k == K_AREA and ttype == "takeoff" and walls:
+            extra["heading"] = u"Wall Area (m\u00b2)"      # v1 heading
         fields.append(field_setting(k, hiddenInRevit=(k in hidden), **extra))
-    return {"category": rs.category_id, "mode": mode, "title": title,
-            "fields": fields,
-            "sort": sort, "itemize": False, "grandTotals": False, "labels": dict(DEFAULT_LABELS)}
+    return {"category": rs.category_id, "tableType": ttype, "title": title, "fields": fields,
+            "group": [sort_setting(k) for k in group], "sort": [sort_setting(k) for k in sort],
+            "groupTotals": True, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS)}
 
 
 def required_keys(settings):
-    """Field keys whose values must be loaded (revit_reader.ensure_values) before building."""
     keys = [f["key"] for f in settings.get("fields", [])]
+    keys += [s["key"] for s in settings.get("group", [])]
     keys += [s["key"] for s in settings.get("sort", [])]
     return keys
-
 
 def _norm_heading(v):
     return re.sub(r"\s+", " ", _s(v) if v else u"").strip().lower()
@@ -249,8 +251,8 @@ def _sum(vals):
 
 
 # --------------------------------------------------------------------------------------------- stage 1
-def select_columns(rs, settings):
-    """Included fields in settings order. Itemize adds Element Id as first column. -> (columns, warnings)."""
+def select_columns(rs, settings, ttype=None):
+    ttype = ttype or effective_type(rs, settings)
     cols, warns = [], []
     for st in settings.get("fields", []):
         if not st.get("include", True):
@@ -258,6 +260,9 @@ def select_columns(rs, settings):
         f = rs.field(st["key"])
         if f is None:
             warns.append(u"Field '%s' not found in this project: skipped." % (st.get("heading") or st["key"]))
+            continue
+        if f.scope == "layer" and ttype != "takeoff":
+            warns.append(u"'%s' is a layer field, only available in a Material takeoff: skipped." % f.label)
             continue
         cols.append(ColumnSpec(f, _fill(st)))
     if settings.get("itemize") and not any(c.key == K_ELEMENT_ID for c in cols):
@@ -276,29 +281,29 @@ def _fill(st):
 
 
 # --------------------------------------------------------------------------------------------- stage 2
-def _group_key(rs, e, curtain, itemize, idx):
+def _sv(v):
+    return round(v, 3) if isinstance(v, float) else v
+
+
+def _group_key(rs, e, itemize, idx, split):
     if itemize:
         return idx
     tr = rs.types[e.type_id]
-    if curtain:
+    if tr.is_curtain:
         wh = (None, _r3(e.get(K_HEIGHT)))
     elif tr.is_layered:
         wh = (None, None)
     else:
         wh = (_r3(e.get(K_WIDTH)), _r3(e.get(K_HEIGHT)))
-    return (e.type_id, e.get(K_LEVEL), wh[0], wh[1])
+    # instance fields used as a group level split the rows (no "Varies" inside a group)
+    return (e.type_id, e.get(K_LEVEL), wh[0], wh[1]) + tuple(_sv(e.get(k)) for k in split)
 
 
-def build_rows(rs, settings, keys, shape, labels):
-    """records -> rows. Returns (rows, expanded). Only invariant values are filled here; element-scope
-    values that can differ inside a group are left empty for stage 3."""
-    curtain = (settings.get("mode") == "curtain")
+def build_rows(rs, settings, keys, ttype, labels, split=()):
     itemize = bool(settings.get("itemize"))
-    els = rs.elements_in_mode(curtain)
-
     groups, order = {}, []
-    for i, e in enumerate(els):
-        k = _group_key(rs, e, curtain, itemize, i)
+    for i, e in enumerate(rs.elements):
+        k = _group_key(rs, e, itemize, i, split)
         if k not in groups:
             groups[k] = []
             order.append(k)
@@ -306,7 +311,7 @@ def build_rows(rs, settings, keys, shape, labels):
 
     fields = [(k, rs.field(k)) for k in keys]
     fields = [(k, f) for k, f in fields if f is not None]
-    expanded = any(f.scope == "layer" for k, f in fields)
+    expanded = (ttype == "takeoff") and any(f.scope == "layer" for k, f in fields)
 
     rows = []
     for gid, k in enumerate(order):
@@ -321,24 +326,22 @@ def build_rows(rs, settings, keys, shape, labels):
                 elif f.scope == "group":
                     cells[key] = len(ges)
                 elif f.scope == "layer":
-                    cells[key] = _layer_cell(key, lay, ges, shape, labels)
+                    cells[key] = _layer_cell(key, lay, ges, labels)
                 elif f.aggregate == "sum":
                     cells[key] = _sum([e.get(key) for e in ges])
                 elif key == K_LEVEL:
                     cells[key] = ges[0].get(K_LEVEL) or None
-                elif key == K_WIDTH and not itemize and not curtain and not tr.is_layered:
+                elif key == K_WIDTH and not itemize and not tr.is_curtain and not tr.is_layered:
                     cells[key] = _r3(ges[0].get(K_WIDTH))
-                elif key == K_HEIGHT and not itemize and (curtain or not tr.is_layered):
+                elif key == K_HEIGHT and not itemize and (tr.is_curtain or not tr.is_layered):
                     cells[key] = _r3(ges[0].get(K_HEIGHT))
             rows.append(Row(ROW_DATA, cells, gid, lay.order if lay is not None else 0, ges))
     return rows, expanded
 
 
-def _layer_cell(key, lay, ges, shape, labels):
+def _layer_cell(key, lay, ges, labels):
     if lay is None:
-        if key == K_LAYER_MATERIAL and shape == "layered":
-            return labels["no_layers"]           # stacked walls etc.
-        return None
+        return labels["no_layers"] if key == K_LAYER_MATERIAL else None
     if key == K_LAYER_ORDER:
         return lay.order
     if key == K_LAYER_MATERIAL:
@@ -385,14 +388,15 @@ def _gap_sig(r, key):
     return sort_value(v)
 
 
-def sort_and_block(rows, sort, itemize, expanded):
-    """Multi-level sort (stable, asc/desc), then blocks. Implicit last keys: group, layer order."""
+def sort_and_block(rows, group, sort, itemize, expanded):
+    """Order: group levels, then sort levels, then (fixed) group id and layer order.
+    A new block starts whenever a group value changes."""
     rows = list(rows)
     rows.sort(key=lambda r: (r.gid, r.lorder))
-    for s in reversed(sort):
+    for s in reversed(list(group) + list(sort)):
         k = s["key"]
         rows.sort(key=lambda r, k=k: sort_value(r.cells.get(k)), reverse=(s.get("dir") == "desc"))
-    gap_keys = [s["key"] for s in sort if s.get("gap")]
+    gap_keys = [s["key"] for s in group]
     blocks, cur, prev = [], [], None
     for r in rows:
         sig = [_gap_sig(r, k) for k in gap_keys]
@@ -443,7 +447,8 @@ def add_calculations(blocks, cols, grand_totals, labels):
         return blocks
     out = []
     for b in blocks:
-        out.append(b + _calc_rows([r for r in b if r.kind == ROW_DATA], cols, False, labels))
+        extra = _calc_rows([r for r in b if r.kind == ROW_DATA], cols, False, labels) if group_totals else []
+        out.append(b + extra)
     if grand_totals:
         all_data = [r for b in blocks for r in b if r.kind == ROW_DATA]
         g = _calc_rows(all_data, cols, True, labels)
@@ -465,28 +470,42 @@ def format_cells(blocks, cols):
 
 
 # ------------------------------------------------------------------------------------------ the pipeline
+def _levels(rs, items, ttype, what, warns):
+    out = []
+    for s in items:
+        f = rs.field(s["key"])
+        if f is None:
+            warns.append(u"%s field '%s' not found in this project: skipped." % (what, s["key"]))
+        elif f.scope == "layer" and ttype != "takeoff":
+            warns.append(u"%s field '%s' needs a Material takeoff: skipped." % (what, f.label))
+        else:
+            out.append(s)
+    return out
+
+
 def build_table(rs, settings):
-    """Run stages 1-7. Returns Result(table, warnings, excel, revit)."""
     labels = dict(DEFAULT_LABELS)
     labels.update(settings.get("labels") or {})
-    mode = settings.get("mode", "standard")
     itemize = bool(settings.get("itemize"))
-    shape = detect_shape(rs, mode)
+    ttype = effective_type(rs, settings)
 
-    cols, warns = select_columns(rs, settings)
-    sort = []
-    for s in settings.get("sort", []):
-        if rs.field(s["key"]) is None:
-            warns.append(u"Sort field '%s' not found in this project: skipped." % s["key"])
-        else:
-            sort.append(s)
+    cols, warns = select_columns(rs, settings, ttype)
+    if settings.get("tableType") == "takeoff" and ttype != "takeoff":
+        warns.insert(0, u"Material takeoff needs layered types: showing a schedule instead.")
+    group = _levels(rs, settings.get("group", []), ttype, u"Group", warns)
+    sort = _levels(rs, settings.get("sort", []), ttype, u"Sort", warns)
+
     keys = [c.key for c in cols]
-    keys += [s["key"] for s in sort if s["key"] not in keys]       # hidden / unused fields still sort
+    for s in group + sort:                                 # hidden / unused fields still group and sort
+        if s["key"] not in keys:
+            keys.append(s["key"])
+    split = [s["key"] for s in group if rs.field(s["key"]).scope == "element"]
 
-    rows, expanded = build_rows(rs, settings, keys, shape, labels)
+    rows, expanded = build_rows(rs, settings, keys, ttype, labels, split)
     rows = apply_varies(rs, rows, keys, itemize, labels)
-    blocks = sort_and_block(rows, sort, itemize, expanded)
-    blocks = add_calculations(blocks, cols, bool(settings.get("grandTotals")), labels)
+    blocks = sort_and_block(rows, group, sort, itemize, expanded)
+    blocks = add_calculations(blocks, cols, bool(settings.get("grandTotals")), labels,
+                              settings.get("groupTotals", True))
     blocks = format_cells(blocks, cols)
 
     if itemize and expanded and len(rows) > 500:

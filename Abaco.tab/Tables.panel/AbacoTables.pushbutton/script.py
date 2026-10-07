@@ -25,6 +25,7 @@ from abaco import preview as PV
 from abaco import filters
 from abaco.filter_ui import FilterTab
 from abaco.layout import build_layout
+from abaco.records import K_IS_CURTAIN
 
 doc = revit.doc
 
@@ -37,6 +38,10 @@ DEFAULTS = {
 CALC_TAGS = list(US.CALC_MODES)            # same order as the fmt_calc items in ui.xaml
 TOTAL_BG = SolidColorBrush(Color.FromRgb(0xF1, 0xF5, 0xFB))
 
+TYPE_HINTS = {
+    "schedule": u"One row per type and level (and size): count, length, height, area.",
+    "takeoff": u"One row per layer / material of each type: thickness, function, material area.",
+}
 
 class NoMatch(Exception):
     """The active filter matches no element: nothing to preview or write."""
@@ -64,6 +69,7 @@ class AbacoWindow(WPFWindow):
         self.fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
         self.suggest_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.suggest_row_click))
         self.sort_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.sort_row_click))
+        self.group_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.group_row_click))
         self.filter_tab = FilterTab(self.filter_list, self.filter_status, self.filter_all, self.filter_any,
                                     on_change=self.refresh_preview)
         self.tabs.SelectionChanged += self.tabs_changed
@@ -107,10 +113,6 @@ class AbacoWindow(WPFWindow):
         i = self.category_combo.SelectedIndex
         return self.cats[i][2] if 0 <= i < len(self.cats) else None
 
-    def is_curtain(self):
-        cat = self.current_cat()
-        return bool(cat is not None and self._is_walls(cat) and self.mode_curtain.IsChecked)
-
     def title_block(self):
         i = self.cmb_titleblock.SelectedIndex
         return self._tb_items[i - 1][1] if i >= 1 else None
@@ -145,9 +147,18 @@ class AbacoWindow(WPFWindow):
         return out[0], out[1]
 
     # ----------------------------------------------------------------------------- model and state
+    def table_type(self):
+        i = self.table_type_combo.SelectedIndex
+        return P.TABLE_TYPES[i] if 0 <= i < len(P.TABLE_TYPES) else "schedule"
+
+    def type_note(self):
+        t = self.table_type()
+        if t == "takeoff" and self.rs is not None and not self.rs.has_layered:
+            return u"This category has no layered types: the table is built as a schedule."
+        return TYPE_HINTS[t]
+
     def default_settings(self):
-        mode = "curtain" if self.is_curtain() else "standard"
-        return P.default_settings(self.rs, mode, self.tb_title.Text.strip())
+        return P.default_settings(self.rs, self.table_type(), self.tb_title.Text.strip())
 
     def load_model(self, keep=False):
         cat = self.current_cat()
@@ -161,6 +172,8 @@ class AbacoWindow(WPFWindow):
         for line in self.rs.summary_lines():
             self.log(line)
         self.category_info.Text = self.rs.summary_lines()[0]
+        self.filter_quick.Visibility = Visibility.Visible if self.rs.has_field(K_IS_CURTAIN) else Visibility.Collapsed
+        self.table_type_note.Text = self.type_note()
         self.state = US.EditState(self.rs, old if old is not None else self.default_settings())
         self.bind_all()
         self.status(u"Ready")
@@ -173,12 +186,9 @@ class AbacoWindow(WPFWindow):
         s = self.state.settings
         s["title"] = self.tb_title.Text.strip()
         flt = self.filter_tab.to_settings()
-        # values of every field the table, the sorting and the filter use must be loaded for ALL elements
-        # (including the ones the filter removes), because the loaded flag is shared with the filtered view
-        keys = [self._key_of(f) for f in s.get("fields", [])] + [self._key_of(x) for x in s.get("sort", [])]
-        keys += filters.needed_keys(flt)
+        keys = P.required_keys(s) + filters.needed_keys(flt)
         rr.ensure_values(doc, self.rs, [k for k in keys if k], self.log)
-        fr = filters.apply_filters(self.rs, self.rs.elements_in_mode(self.is_curtain()), flt)
+        fr = filters.apply_filters(self.rs, self.rs.elements, flt)
         self.filter_result = fr
         self.filter_tab.show_result(fr)               # per-row errors + "n of N elements match"
         if fr.n_active and fr.matched == 0:
@@ -192,6 +202,10 @@ class AbacoWindow(WPFWindow):
         self.bind_sort()
         self.bind_options()
         self.bind_format()
+        self.bind_group()
+
+    def bind_group(self):
+        self.group_list.ItemsSource = self.state.group_rows(self.row_changed)
 
     def bind_fields(self):
         self.fields_list.ItemsSource = self.state.field_rows(self.row_changed)
@@ -347,7 +361,6 @@ class AbacoWindow(WPFWindow):
         if self.filter_tab is not None:
             self.filter_tab.clear()
         walls = self._is_walls(cat)
-        self.wall_mode_panel.Visibility = Visibility.Visible if walls else Visibility.Collapsed
         name, count = self.cats[self.category_combo.SelectedIndex][:2]
         self.category_info.Text = u"%d elements. The model is read when you open the Preview tab or press Run." % count
         auto = (u"Abaco %s" % name)[:31]
@@ -356,10 +369,6 @@ class AbacoWindow(WPFWindow):
         self._auto_name = auto
         self.preview_status.Text = u"Open this tab to read the model."
 
-    def mode_changed(self, sender, args):
-        if not self._ready or self.rs is None:
-            return
-        self.state = US.EditState(self.rs, self.default_settings())     # new template, no rescan
 
     def browse_click(self, sender, args):
         path = forms.save_file(file_ext="xlsx", default_name=os.path.basename(self.tb_path.Text or "Abaco_tables.xlsx"),
@@ -376,8 +385,10 @@ class AbacoWindow(WPFWindow):
             self.state.set_include(row.key, row.Include)
             self.update_counts()
             self.bind_format()
+        elif isinstance(row, US.GroupRow):                  # before SortRow: it is a subclass
+            self.state.group_set(row.Index - 1, label=row.Column, descending=row.Descending)
         elif isinstance(row, US.SortRow):
-            self.state.sort_set(row.Index - 1, label=row.Column, descending=row.Descending, gap=row.GapRow)
+            self.state.sort_set(row.Index - 1, label=row.Column, descending=row.Descending)
         self.refresh_preview()
 
     def field_row_click(self, sender, args):
@@ -450,10 +461,45 @@ class AbacoWindow(WPFWindow):
     def options_changed(self, sender, args):
         if not self._ready or self._loading or self.state is None:
             return
-        self.state.settings["grandTotals"] = bool(self.chk_grand_totals.IsChecked)
-        self.state.settings["itemize"] = bool(self.chk_itemize.IsChecked)
+        s = self.state.settings
+        s["groupTotals"] = bool(self.chk_group_totals.IsChecked)
+        s["grandTotals"] = bool(self.chk_grand_totals.IsChecked)
+        s["itemize"] = bool(self.chk_itemize.IsChecked)
         self.bind_format()
         self.refresh_preview()
+
+    # --------------------------------------------------------------------------------- grouping tab
+    def table_type_changed(self, sender, args):
+        if not self._ready:
+            return
+        self.table_type_note.Text = self.type_note()
+        if self.rs is None:
+            return
+        self.state = US.EditState(self.rs, self.default_settings())   # new template, no rescan
+        self.bind_all()
+        self.refresh_preview()
+
+    def group_row_click(self, sender, args):
+        btn = args.OriginalSource
+        row = getattr(btn, "DataContext", None)
+        if getattr(btn, "Tag", None) != "remove" or row is None or self.state is None:
+            return
+        self.state.group_remove(row.Index - 1)
+        self.bind_group()
+        self.refresh_preview()
+
+    def group_add_click(self, sender, args):
+        if self.state is not None:
+            self.state.group_add()
+            self.bind_group()
+            self.refresh_preview()
+
+    def group_clear_click(self, sender, args):
+        if self.state is not None:
+            self.state.group_clear()
+            self.bind_group()
+            self.refresh_preview()
+
 
     # ------------------------------------------------------------------------------------ filter tab
     def filter_add_click(self, sender, args):
@@ -467,6 +513,14 @@ class AbacoWindow(WPFWindow):
     def filter_match_click(self, sender, args):
         if self._ready and self.filter_tab is not None:
             self.filter_tab.changed()
+
+    def filter_curtain_only_click(self, sender, args):
+        if self.filter_tab is not None and self.rs is not None:
+            self.filter_tab.set_condition(K_IS_CURTAIN, u"eq", u"Yes")
+
+    def filter_no_curtain_click(self, sender, args):
+        if self.filter_tab is not None and self.rs is not None:
+            self.filter_tab.set_condition(K_IS_CURTAIN, u"ne", u"Yes")
 
     # ------------------------------------------------------------------------------ formatting tab
     def _fmt_key(self):

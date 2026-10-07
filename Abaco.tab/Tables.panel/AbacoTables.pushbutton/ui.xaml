@@ -384,6 +384,14 @@
                             <StackPanel>
                                 <TextBlock Style="{StaticResource CardTitle}" Text="1 · Source"/>
                                 <Grid>
+                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Table type"/>
+                                    <ComboBox x:Name="table_type_combo" Grid.Row="0" Grid.Column="1" SelectedIndex="0"
+                                            SelectionChanged="table_type_changed">
+                                        <ComboBoxItem Content="Schedule / Quantities"/>
+                                        <ComboBoxItem Content="Material takeoff"/>
+                                    </ComboBox>
+                                    <TextBlock x:Name="table_type_note" Grid.Row="1" Grid.Column="1" Style="{StaticResource Hint}"
+                                            Margin="0,3,0,0" Text="One row per type and level (and size): count, length, height, area."/>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170"/>
                                         <ColumnDefinition Width="*"/>
@@ -398,16 +406,8 @@
                                               SelectionChanged="category_changed"/>
                                     <TextBlock x:Name="category_info" Grid.Row="1" Grid.Column="1"
                                                Style="{StaticResource Hint}" Margin="0,3,0,0"/>
-                                    <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Wall type"
-                                               Margin="0,8,0,0"/>
-                                    <StackPanel x:Name="wall_mode_panel" Grid.Row="2" Grid.Column="1"
-                                                Orientation="Horizontal" Margin="0,8,0,0">
-                                        <RadioButton x:Name="mode_standard" GroupName="wallmode" IsChecked="True"
-                                                     Content="Standard walls (all except curtain walls)"
-                                                     Margin="0,0,24,0" Checked="mode_changed"/>
-                                        <RadioButton x:Name="mode_curtain" GroupName="wallmode"
-                                                     Content="Curtain walls only" Checked="mode_changed"/>
-                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                               Text="To limit the table (for example curtain walls only) use the Filter tab in Preview."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -509,7 +509,7 @@
             <TabItem Header="Preview">
                 <Grid Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="372"/>
+                        <ColumnDefinition Width="420"/>
                         <ColumnDefinition Width="12"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
@@ -553,8 +553,6 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
-                                                        <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"
-                                                                ToolTip="Show this field in the table"/>
                                                         <TextBlock Grid.Column="2" Text="{Binding Label}" VerticalAlignment="Center"
                                                                 TextTrimming="CharacterEllipsis"/>
                                                         <Border Grid.Column="3" Style="{StaticResource ChipInfo}"
@@ -697,20 +695,28 @@
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
                                                 Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
                                     </StackPanel>
+                                    <StackPanel x:Name="filter_quick" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Quick" Margin="0,0,8,0"/>
+                                        <Button Content="Curtain walls only" Style="{StaticResource LinkButton}" Margin="0,0,12,0"
+                                                Click="filter_curtain_only_click"/>
+                                        <Button Content="Exclude curtain walls" Style="{StaticResource LinkButton}"
+                                                Click="filter_no_curtain_click"/>
+                                    </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                             
-                            <!-- Sorting / Grouping -->
-                            <TabItem Header="Sorting / Grouping" Style="{StaticResource LineTab}">
+                            <!-- Grouping -->
+                            <TabItem Header="Grouping" Style="{StaticResource LineTab}">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel Margin="12,10,12,12">
                                         <DockPanel Margin="0,0,0,6">
                                             <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
-                                                    Click="sort_clear_click" VerticalAlignment="Center"/>
-                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort by"/>
+                                                    Click="group_clear_click" VerticalAlignment="Center"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Group by"/>
                                         </DockPanel>
-
-                                        <ItemsControl x:Name="sort_list">
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                                                Text="A new block (blank row between blocks) starts whenever one of these values changes. Groups are ordered first; the Sorting levels apply inside each group."/>
+                                        <ItemsControl x:Name="group_list">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <Grid Height="32">
@@ -719,51 +725,65 @@
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
                                                                 HorizontalAlignment="Left">
                                                             <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Border>
                                                         <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
-                                                                  SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
+                                                                SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
                                                         <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
-                                                                      IsChecked="{Binding Descending, Mode=TwoWay}"
-                                                                      ToolTip="Click to switch ascending / descending"/>
-                                                        <CheckBox Grid.Column="3" Content="Gap row" Margin="8,0,0,0" FontSize="11"
-                                                                  IsChecked="{Binding GapRow, Mode=TwoWay}"
-                                                                  ToolTip="Start a new block (blank row) when this value changes"/>
-                                                        <Button Grid.Column="4" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Remove level"/>
+                                                                    IsChecked="{Binding Descending, Mode=TwoWay}"
+                                                                    ToolTip="Click to switch ascending / descending"/>
+                                                        <Button Grid.Column="3" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                                                                ToolTip="Remove group"/>
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-
-                                        <StackPanel Orientation="Horizontal" Height="26">
-                                            <Border Width="16" Height="16" CornerRadius="8" Background="#8A93A3">
-                                                <TextBlock x:Name="sort_fixed_index" Text="4" Foreground="White" FontSize="10"
-                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            </Border>
-                                            <TextBlock Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       Text="then by layer Order (fixed: keeps the build-up in sequence)"/>
-                                        </StackPanel>
-
-                                        <Button Content="+ Add level" Style="{StaticResource SecondaryButton}" Padding="12,4"
-                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="sort_add_click"/>
+                                        <Button Content="+ Add group" Style="{StaticResource SecondaryButton}" Padding="12,4"
+                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="group_add_click"/>
 
                                         <Separator Margin="0,12,0,8" Background="{StaticResource LineSoft}"/>
 
+                                        <CheckBox x:Name="chk_group_totals" Content="Totals for each group" IsChecked="True" Margin="0,0,0,6"
+                                                Checked="options_changed" Unchecked="options_changed"/>
                                         <CheckBox x:Name="chk_grand_totals" Content="Grand totals" Margin="0,0,0,6"
-                                                  Checked="options_changed" Unchecked="options_changed"/>
+                                                Checked="options_changed" Unchecked="options_changed"/>
                                         <CheckBox x:Name="chk_itemize" Content="Itemize every instance"
-                                                  Checked="options_changed" Unchecked="options_changed"/>
+                                                Checked="options_changed" Unchecked="options_changed"/>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0">
-                                            <Run Text="Off: identical elements are merged into one row, and a column whose values differ inside a group shows "/>
+                                            <Run Text="Off: identical elements are merged into one row; a column whose values differ inside a row shows "/>
                                             <Run Text="Varies" FontStyle="Italic" Foreground="{StaticResource WarnText}"/>
-                                            <Run Text=". On: one row per element, nothing is merged."/>
+                                            <Run Text=". Grouping by an instance field splits the rows instead. On: one row per element."/>
                                         </TextBlock>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </TabItem>
+
+                            <!-- Sorting -->
+                            <TabItem Header="Sorting" Style="{StaticResource LineTab}">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="12,10,12,12">
+                                        <DockPanel Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
+                                                    Click="sort_clear_click" VerticalAlignment="Center"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort by (inside each group)"/>
+                                        </DockPanel>
+                                        <ItemsControl x:Name="sort_list">
+                                            <!-- same ItemTemplate as group_list above (badge, combo, A→Z toggle, remove); no gap checkbox -->
+                                        </ItemsControl>
+                                        <StackPanel Orientation="Horizontal" Height="26">
+                                            <Border Width="16" Height="16" CornerRadius="8" Background="#8A93A3">
+                                                <TextBlock x:Name="sort_fixed_index" Text="1" Foreground="White" FontSize="10"
+                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                    Text="then by layer Order (fixed, Material takeoff: keeps the build-up in sequence)"/>
+                                        </StackPanel>
+                                        <Button Content="+ Add level" Style="{StaticResource SecondaryButton}" Padding="12,4"
+                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="sort_add_click"/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>

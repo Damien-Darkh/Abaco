@@ -14,10 +14,9 @@ from abaco.sheet import build_sheet
 from abaco.excel_writer import write_table
 
 
-def build(doc, category, curtain, title, hidden_text, log=None):
-    """Returns (RecordSet, pipeline.Result)."""
+def build(doc, category, table_type, title, hidden_text, log=None):
     rs = revit_reader.read_category(doc, category, log)
-    settings = pipeline.default_settings(rs, "curtain" if curtain else "standard", title or u"")
+    settings = pipeline.default_settings(rs, table_type, title or u"")
     pipeline.apply_hidden_headings(rs, settings, hidden_text)
     return rs, build_result(doc, rs, settings, log)
 

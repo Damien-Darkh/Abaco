@@ -299,3 +299,14 @@ class FilterTab(object):
     def _tick(self, sender, args):
         self._timer.Stop()
         self._on_change()
+
+    def set_condition(self, key, op, value):
+        """Quick filters: replace any condition on this field with a ready-made one."""
+        if key not in self._keys.values():
+            return False
+        for r in [r for r in self.rows if self.key_of(r.Column) == key]:
+            self.rows.Remove(r)
+        self.rows.Add(self._make_row({"key": key, "op": op, "value": value}))
+        self._renumber()
+        self.changed()
+        return True
