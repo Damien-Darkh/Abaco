@@ -61,8 +61,11 @@ class FilterRow(forms.Reactive):
         self._error = u""
         self._code_by_label = {}
         self._label_by_code = {}
+        self._exact = False
+        self._suggestions = _net([])
         self._fill_operators(op_code)
         self._loading = False
+        self._labels_all = {}                     # key -> label of every field (for "not in Fields" rows)
 
     # ---- bound properties
     @forms.reactive
@@ -112,6 +115,8 @@ class FilterRow(forms.Reactive):
         self._operator = v
         code = self._code_by_label.get(v)
         self.NeedsValue = filters.needs_value(code) if code else True
+        self.IsExact = code in ("eq", "ne")
+        self.IsText = None
         self._changed()
 
     @forms.reactive
@@ -151,6 +156,30 @@ class FilterRow(forms.Reactive):
     def HasError(self, v):
         pass                                      # derived from Error; the setter only raises the notification
 
+    @forms.reactive
+    def IsExact(self):
+        return self._exact
+
+    @IsExact.setter
+    def IsExact(self, v):
+        self._exact = bool(v)
+
+    @forms.reactive
+    def IsText(self):
+        return self._needs and not self._exact
+
+    @IsText.setter
+    def IsText(self, v):
+        pass                                      # derived from NeedsValue and IsExact
+
+    @forms.reactive
+    def Suggestions(self):
+        return self._suggestions
+
+    @Suggestions.setter
+    def Suggestions(self, v):
+        self._suggestions = v
+
     # ---- internals
     def _changed(self):
         if not self._loading:
@@ -168,6 +197,7 @@ class FilterRow(forms.Reactive):
         self._operator = u""                      # force the setter below to run its notifications
         self.Operators = _net([lab for _, lab in ops])
         self.Operator = self._label_by_code.get(keep, ops[0][1])
+        self.Suggestions = self._tab.values_for(self._column)
         self._loading = was
 
     def to_condition(self):
@@ -193,17 +223,42 @@ class FilterTab(object):
         self._timer.Interval = TimeSpan.FromMilliseconds(delay_ms)
         self._timer.Tick += self._tick
 
+
+    def values_for(self, label):
+        """Distinct values of a field across the model, for the Value suggestions."""
+        key = self.key_of(label)
+        if not key or self._rs is None:
+            return _net([])
+        if key not in self._value_cache:
+            seen = set()
+            for er in self._rs.elements:
+                try:
+                    v = self._rs.value(er, key)
+                except KeyError:
+                    continue
+                if v is not None and u"%s" % v != u"":
+                    seen.add(u"%s" % v)
+            self._value_cache[key] = _net(sorted(seen, key=lambda s: s.lower()))
+        return self._value_cache[key]
+    
     # ---- catalogue
-    def set_catalogue(self, rs):
-        """Offer every element/type field of the record set. Existing conditions are kept (re-read model)."""
-        saved = self.to_settings() if self._keys else filters.default_settings()
+    def set_catalogue(self, rs, allowed=None):
+        """Offer only the fields of the Fields tab (allowed = their keys). Existing conditions are kept."""
+        self._rs = rs
+        self._value_cache = {}
+        saved = self.to_settings()
         labels = rs.display_labels()
+        self._labels_all = labels
+        self._allowed = None if allowed is None else set(allowed)
         self._keys, self._fields = {}, {}
         for f in rs.fields:
-            if f.scope in filters.FILTERABLE_SCOPES:
-                lab = labels[f.key]
-                self._keys[lab] = f.key
-                self._fields[lab] = f
+            if f.scope not in filters.FILTERABLE_SCOPES:
+                continue
+            if self._allowed is not None and f.key not in self._allowed:
+                continue
+            lab = labels[f.key]
+            self._keys[lab] = f.key
+            self._fields[lab] = f
         self._labels = sorted(self._keys, key=lambda s: s.lower())
         self.load(saved)
 
@@ -218,7 +273,7 @@ class FilterTab(object):
         for lab, k in self._keys.items():
             if k == key:
                 return lab, self._labels
-        lab = u"%s (not found)" % key             # saved condition whose field is gone: keep it, flag it
+        lab = u"%s (not in Fields)" % self._labels_all.get(key, key)   # kept, flagged, skipped
         self._keys[lab] = key
         self._fields[lab] = None
         return lab, self._labels + [lab]

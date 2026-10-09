@@ -28,13 +28,13 @@ def build_result(doc, rs, settings, log=None):
 
 
 def draw_revit(doc, result, name, prefix, text_mm, page_h_mm, title_block):
-    """Report lines. Must run inside a transaction."""
+    """Report lines. Must run inside a transaction. text_mm is ignored: the appearance sets it."""
     report = []
     hidden = [c.heading for c in result.table.columns if c.hidden_in_revit]
     if hidden:
         report.append(u"Hidden in Revit: " + u", ".join(hidden))
-    layout = build_layout(result.revit, text_mm, page_h_mm)
-    return report + layout.report + drafting.build_tables(doc, layout, name, prefix, text_mm, title_block)
+    layout = build_layout(result.revit, text_mm, page_h_mm, result.appearance)
+    return report + layout.report + drafting.build_tables(doc, layout, name, prefix, title_block)
 
 
 def write_excel(path, name, result):

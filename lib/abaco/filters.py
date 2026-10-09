@@ -191,14 +191,18 @@ class FilterResult(object):
         return s
 
 
-def apply_filters(rs, elements, settings):
-    """Filter ElementRecords. Unusable conditions are skipped and reported in FilterResult.errors."""
+def apply_filters(rs, elements, settings, allowed=None):
+    """Filter ElementRecords. Unusable conditions are skipped and reported in FilterResult.errors.
+    allowed: keys of the fields in the Fields tab; a condition on any other field is skipped."""
     settings = normalize_settings(settings)
     match_all = settings["match"] != MATCH_ANY
     elements = list(elements)
     active, errors, incomplete = [], [], 0
     for c in settings["conditions"]:
         f = rs.field(c["key"]) if c["key"] else None
+        if f is not None and allowed is not None and f.key not in allowed:
+            errors.append(u"field is not in the Fields tab")
+            continue
         state, msg = status(c, f, rs.loaded_keys)
         errors.append(msg if state == "error" else u"")
         if state == "ok":

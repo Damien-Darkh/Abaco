@@ -17,15 +17,35 @@ except Exception:
 
 from abaco import pipeline as P
 from abaco.records import K_TYPE_MARK
+from abaco import appearance as AP
 
 CALC_MODES = P.CALC_MODES
 ALIGN_CHIP = {"left": u"L", "center": u"C", "right": u"R"}
 SCOPE_TEXT = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated"}
 EXCEL_BAD = u":\\/?*[]"
 REVIT_BAD = u"\\:{}[]|;<>?`~"
+FOOTER_MODES = [(u"Per field", "field"), (u"Totals", "total"), (u"Min", "min"),
+                (u"Max", "max"), (u"Min and max", "minmax")]
+FOOTER_CODE = dict((lab, code) for lab, code in FOOTER_MODES)
+FOOTER_LABEL = dict((code, lab) for lab, code in FOOTER_MODES)
+
+COMMON_FONTS = [u"Arial", u"Calibri", u"Consolas", u"Courier New", u"Georgia", u"Segoe UI",
+                u"Tahoma", u"Times New Roman", u"Verdana"]
+FONT_SEP = u"\u2500" * 12
 
 
 # ---------------------------------------------------------------------------------------------- helpers
+
+def _netlist(items):
+    try:
+        from System.Collections.Generic import List
+        out = List[object]()
+        for i in items:
+            out.Add(i)
+        return out
+    except Exception:
+        return list(items)
+    
 def parse_decimal(text):
     """'2,5' or '2.5' -> 2.5 (Italian decimal comma). Raises ValueError."""
     t = (text or u"").strip().replace(u",", u".")
@@ -64,6 +84,32 @@ def check_excel_path(path):
     if folder and not os.path.isdir(folder):
         out.append(u"Folder not found: %s" % folder)
     return out
+
+def installed_fonts():
+    """Common fonts first, a separator, then every other installed font (read from the machine)."""
+    try:
+        import clr
+        clr.AddReference("System.Drawing")
+        from System.Drawing.Text import InstalledFontCollection
+        names = [f.Name for f in InstalledFontCollection().Families]
+    except Exception:
+        names = list(COMMON_FONTS)
+    names = sorted(set(names), key=lambda s: s.lower())
+    common = [n for n in COMMON_FONTS if n in names]
+    rest = [n for n in names if n not in common]
+    return common + ([FONT_SEP] if common and rest else []) + rest
+
+
+def brush(hexcolor):
+    """WPF brush for a '#RRGGBB' string (None when empty or WPF is not available)."""
+    if not hexcolor:
+        return None
+    try:
+        from System.Windows.Media import SolidColorBrush, Color
+        h = hexcolor.lstrip("#")
+        return SolidColorBrush(Color.FromRgb(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------------------------- row items
@@ -104,6 +150,36 @@ def _bind(name, watched=True):
     return property(getter, setter)
 
 
+class ElemRow(Observable):
+    Bold = _bind("Bold")
+    Italic = _bind("Italic")
+    Underline = _bind("Underline")
+    Lines = _bind("Lines")
+    Case = _bind("Case")
+    Align = _bind("Align")
+    Orientation = _bind("Orientation")
+
+    def __init__(self, element, label, e, on_change=None):
+        Observable.__init__(self)
+        self.element = element
+        self.Label = label
+        self._Bold = bool(e["bold"])
+        self._Italic = bool(e["italic"])
+        self._Underline = bool(e["underline"])
+        self._Lines = bool(e["lines"])
+        self._Case = AP.CASE_LABEL[e["case"]]
+        self.CaseItems = _netlist([lab for lab, _ in AP.CASES])
+        self.HasAlign = "align" in e
+        self._Align = AP.ALIGN_LABEL.get(e.get("align"), u"Left")
+        self.AlignItems = _netlist([lab for lab, _ in AP.ALIGNS])
+        self.HasOrient = "orientation" in e
+        self._Orientation = AP.ORIENT_LABEL.get(e.get("orientation"), u"Horizontal")
+        self.OrientItems = _netlist([lab for lab, _ in AP.ORIENTS])
+        self.TextBrush = brush(e["color"])
+        self.BgBrush = brush(e["background"])
+        self.on_change = on_change
+
+
 class FieldRow(Observable):
     Include = _bind("Include")
 
@@ -124,21 +200,26 @@ class SuggestRow(object):
         self.ScopeText = scope_text
 
 
-class SortRow(Observable):
+class LevelRow(Observable):
     Column = _bind("Column")
     Descending = _bind("Descending")
+    Header = _bind("Header")
+    Footer = _bind("Footer")
+    Gap = _bind("Gap")
+    FooterMode = _bind("FooterMode")
 
-    def __init__(self, index, columns, column, descending, on_change=None):
+    def __init__(self, index, columns, column, descending, header, footer, gap, footer_calc, on_change=None):
         Observable.__init__(self)
         self.Index = index
         self.Columns = columns
         self._Column = column
         self._Descending = bool(descending)
+        self._Header = bool(header)
+        self._Footer = bool(footer)
+        self._Gap = bool(gap)
+        self._FooterMode = FOOTER_LABEL.get(footer_calc, FOOTER_LABEL["field"])
+        self.FooterModes = _netlist([lab for lab, _ in FOOTER_MODES])
         self.on_change = on_change
-
-
-class GroupRow(SortRow):
-    pass
 
 
 class FormatRow(Observable):
@@ -189,10 +270,6 @@ class EditState(object):
 
     def _usable(self, f):
         return f.scope != "layer" or P.effective_type(self.rs, self.settings) == "takeoff"
-
-    def counts(self):
-        shown = sum(1 for st in self.settings["fields"] if st.get("include", True))
-        return shown, sum(1 for f in self.rs.fields if self._usable(f))
 
     # ---- fields
     def field_rows(self, on_change=None):
@@ -262,77 +339,57 @@ class EditState(object):
         return [r for _, r in out[:limit]]
 
     # ---- sorting
+    def table_keys(self):
+        """Keys of the fields checked in the Fields tab: the only fields Sort & group and Filter may use."""
+        out = []
+        for st in self.settings["fields"]:
+            if st.get("include", True) and self.rs.field(st["key"]) is not None:
+                out.append(st["key"])
+        return out
+
     def sort_columns(self):
-        return sorted([self.label(f.key) for f in self.rs.fields if self._usable(f)],
-                      key=lambda s: s.lower())
+        keys = [k for k in self.table_keys() if self._usable(self.rs.field(k))]
+        return sorted([self.label(k) for k in keys], key=lambda s: s.lower())
 
-    def sort_rows(self, on_change=None):
+
+    # ---- sort and group: one list of levels
+    def level_rows(self, on_change=None):
         cols = self.sort_columns()
-        return [SortRow(i + 1, cols, self.label(s["key"]), s.get("dir") == "desc", s.get("gap"), on_change)
-                for i, s in enumerate(self.settings["sort"])]
+        rows = []
+        for i, s in enumerate(self.settings.setdefault("levels", [])):
+            lab = self.label(s["key"])
+            own = cols if lab in cols else cols + [lab]     # field left the table: keep it visible
+            rows.append(LevelRow(i + 1, own, lab, s.get("dir") == "desc",
+                                 s.get("header"), s.get("footer"), s.get("gap"),
+                                 s.get("footerCalc") or "field", on_change))
+        return rows
 
-    def sort_set(self, index0, label=None, descending=None, gap=None):
-        s = self.settings["sort"][index0]
-        if label is not None and label in self._by_label:
-            s["key"] = self._by_label[label]
-        if descending is not None:
-            s["dir"] = "desc" if descending else "asc"
-        if gap is not None:
-            s["gap"] = bool(gap)
+    def level_update(self, i, row):
+        """Copy the edited properties of one row back into the settings (user edits only)."""
+        s = self.settings["levels"][i]
+        if row.Column in self._by_label:
+            s["key"] = self._by_label[row.Column]
+        s["dir"] = "desc" if row.Descending else "asc"
+        s["header"] = bool(row.Header)
+        s["footer"] = bool(row.Footer)
+        s["gap"] = bool(row.Gap)
+        s["footerCalc"] = FOOTER_CODE.get(row.FooterMode, "field")
 
-    def sort_add(self):
-        used = set(s["key"] for s in self.settings["sort"])
-        key = None
-        for st in self.settings["fields"]:
-            if st.get("include", True) and st["key"] not in used and self.rs.field(st["key"]) is not None:
-                key = st["key"]
-                break
-        if key is None:
-            key = K_TYPE_MARK if self.rs.field(K_TYPE_MARK) is not None else self.rs.fields[0].key
-        self.settings["sort"].append(P.sort_setting(key))
+    def level_add(self):
+        keys = self.table_keys()
+        used = set(s["key"] for s in self.settings.get("levels", []))
+        free = [k for k in keys if k not in used]
+        choice = (free or keys or [None])[0]
+        if choice is None:
+            return
+        self.settings.setdefault("levels", []).append(P.sort_setting(choice))
 
-    def sort_remove(self, index0):
-        del self.settings["sort"][index0]
+    def level_remove(self, i):
+        del self.settings["levels"][i]
 
-    def sort_clear(self):
-        self.settings["sort"] = []
-
-
-    # ---- sorting and grouping: two lists with the same shape
-    def _level_rows(self, name, cls, on_change):
-        cols = self.sort_columns()
-        return [cls(i + 1, cols, self.label(s["key"]), s.get("dir") == "desc", on_change)
-                for i, s in enumerate(self.settings.setdefault(name, []))]
-
-    def _level_set(self, name, index0, label=None, descending=None):
-        s = self.settings[name][index0]
-        if label is not None and label in self._by_label:
-            s["key"] = self._by_label[label]
-        if descending is not None:
-            s["dir"] = "desc" if descending else "asc"
-
-    def _level_add(self, name):
-        used = set(s["key"] for n in ("group", "sort") for s in self.settings.get(n, []))
-        key = None
-        for st in self.settings["fields"]:
-            if st.get("include", True) and st["key"] not in used and self.rs.field(st["key"]) is not None:
-                key = st["key"]
-                break
-        if key is None:
-            key = K_TYPE_MARK if self.rs.field(K_TYPE_MARK) is not None else self.rs.fields[0].key
-        self.settings.setdefault(name, []).append(P.sort_setting(key))
-
-    def sort_rows(self, on_change=None):   return self._level_rows("sort", SortRow, on_change)
-    def group_rows(self, on_change=None):  return self._level_rows("group", GroupRow, on_change)
-    def sort_set(self, i, label=None, descending=None):   self._level_set("sort", i, label, descending)
-    def group_set(self, i, label=None, descending=None):  self._level_set("group", i, label, descending)
-    def sort_add(self):      self._level_add("sort")
-    def group_add(self):     self._level_add("group")
-    def sort_remove(self, i):   del self.settings["sort"][i]
-    def group_remove(self, i):  del self.settings["group"][i]
-    def sort_clear(self):    self.settings["sort"] = []
-    def group_clear(self):   self.settings["group"] = []
-
+    def level_clear(self):
+        self.settings["levels"] = []
+        
 
     # ---- formatting
     def heading(self, key):
@@ -371,3 +428,45 @@ class EditState(object):
                 st["calc"] = v if v in CALC_MODES else "none"
             else:
                 st[k] = v
+
+    # ---- appearance
+    def app(self):
+        return self.settings["appearance"]
+
+    def app_touch(self):
+        self.app()["theme"] = "custom"
+
+    def app_element_rows(self, on_change=None):
+        app = self.app()
+        return [ElemRow(k, lab, app["elements"][k], on_change) for k, lab in AP.ELEMENTS]
+
+    def app_element_update(self, row):
+        e = self.app()["elements"][row.element]
+        e["bold"], e["italic"], e["underline"] = bool(row.Bold), bool(row.Italic), bool(row.Underline)
+        e["lines"] = bool(row.Lines)
+        e["case"] = AP.CASE_CODE.get(row.Case, "none")
+        if "align" in e and row.Align in AP.ALIGN_CODE:
+            e["align"] = AP.ALIGN_CODE[row.Align]
+        if "orientation" in e and row.Orientation in AP.ORIENT_CODE:
+            e["orientation"] = AP.ORIENT_CODE[row.Orientation]
+        self.app_touch()
+
+    def app_color(self, element, which, hexcolor):
+        """which: 'color' (text) or 'background'. hexcolor None clears the background."""
+        self.app()["elements"][element][which] = hexcolor
+        self.app_touch()
+
+    def app_set(self, path, value):
+        d = self.app()
+        for k in path[:-1]:
+            d = d[k]
+        d[path[-1]] = value
+        self.app_touch()
+
+    def app_theme(self, theme):
+        app = self.app()
+        fresh = AP.preset(theme, app["accent"])
+        app["elements"] = fresh["elements"]
+        app["zebra"] = fresh["zebra"]
+        app["lines"]["color"] = fresh["lines"]["color"]
+        app["theme"] = theme

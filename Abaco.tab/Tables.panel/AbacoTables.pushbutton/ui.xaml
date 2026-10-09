@@ -6,42 +6,22 @@
         ShowInTaskbar="False">
 
     <!--
-    CODE CONTRACT (for script.py, Phase 4)
-    ======================================
-    No event handlers are declared inside DataTemplates (XamlReader cannot wire them).
-    The script attaches ONE container-level handler per list instead, e.g.
-        fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
-    and reads args.OriginalSource.Tag ("up" / "down" / "remove" / "add") and .DataContext (the row item).
-    List rows must be INotifyPropertyChanged items (pyrevit.forms.reactive) so two-way bindings work.
-    The outer/inner TabControls ('tabs', 'edit_tabs') have no XAML handler: the script subscribes to
-    SelectionChanged and checks args.OriginalSource (the event bubbles up from child ComboBoxes).
-    Radio/combo events fire while the XAML loads: guard every handler with a ready flag.
-
-    Row item properties
-      fields_list   : Include (bool, 2-way), Label, HasScope (bool), ScopeText
-      suggest_list  : Label, ScopeText                      (Button Tag="add")
-      sort_list     : Index, Columns (list), Column (2-way), Descending (2-way), GapRow (2-way)
-                                                            (Button Tag="remove")
-      format_list   : Label, AlignChip ("L"/"C"/"R"), HiddenInRevit, NoExcel, HasCalc  (all bool except text)
-
-    Handlers declared on named, top-level elements
-      category_changed, mode_changed, browse_click, view_changed, reread_click, fields_reset_click,
-      param_search_changed, sort_add_click, sort_clear_click, options_changed, format_selection_changed,
-      fmt_heading_changed, orient_click, align_click, fmt_width_changed, fmt_auto_click, fmt_calc_changed,
-      fmt_flag_click, preview_loading_row, run_click, close_click
-
-    Drawn from code
-      preview_grid  : columns are created in code, Binding("[i]") on List[object] rows,
-                      ElementStyle = CellText (shows the word "Varies" as an orange pill);
-                      preview_loading_row bolds total rows and shrinks blank spacer rows.
-      revit_canvas  : lines + TextBlocks from the layout engine, 3.6 px per mm. width_ruler gets one
-                      TextBlock per column ("18 mm"). Same layout output as the real drafting view.
+    CODE CONTRACT (script.py)
+    Row items are INotifyPropertyChanged (ui_state.py). Button clicks inside list templates are handled
+    by one AddHandler per list: args.OriginalSource.Tag and .DataContext.
+      fields_list  : Tag up | down | remove                 (FieldRow.Include is two-way)
+      suggest_list : Tag add
+      level_list   : Tag remove                              (LevelRow: Column, Descending, Header, Footer, Gap, FooterMode)
+      filter_list  : Tag remove
+      elem_list    : Tag text | bg | bgnone                  (ElemRow: Bold, Italic, Underline, Lines, Case)
+      format_list  : selection only
+    Handlers on named elements: see script.py. Guard every handler with a ready flag (events fire while loading).
     -->
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="B2V"/>
 
-        <!-- ================= brushes ================= -->
+        <!-- brushes -->
         <SolidColorBrush x:Key="Accent" Color="#2F6FDE"/>
         <SolidColorBrush x:Key="AccentHover" Color="#2459B8"/>
         <SolidColorBrush x:Key="AccentSoft" Color="#EAF1FD"/>
@@ -54,7 +34,7 @@
         <SolidColorBrush x:Key="GoodBg" Color="#E3F3EA"/>
         <SolidColorBrush x:Key="GoodText" Color="#14653D"/>
 
-        <!-- ================= text and surfaces ================= -->
+        <!-- text and surfaces -->
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="White"/>
             <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
@@ -114,7 +94,7 @@
             <Setter Property="Foreground" Value="#3B4350"/>
         </Style>
 
-        <!-- ================= buttons ================= -->
+        <!-- buttons -->
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="Background" Value="{StaticResource Accent}"/>
@@ -206,7 +186,7 @@
             </Setter>
         </Style>
 
-        <!-- segmented radio buttons (view toggle, orientation, alignment) -->
+        <!-- segmented radio buttons -->
         <Style x:Key="Seg" TargetType="RadioButton">
             <Setter Property="Padding" Value="10,3"/>
             <Setter Property="FontSize" Value="11"/>
@@ -231,7 +211,7 @@
             </Setter>
         </Style>
 
-        <!-- sort direction toggle: shows A-Z, shows Z-A when checked (bound to Descending) -->
+        <!-- sort direction toggle: A→Z, Z→A when checked -->
         <Style x:Key="DirToggle" TargetType="ToggleButton">
             <Setter Property="Content" Value="A→Z"/>
             <Setter Property="Width" Value="52"/>
@@ -261,7 +241,7 @@
             </Style.Triggers>
         </Style>
 
-        <!-- underlined tab strip for the inner Fields / Sorting / Formatting tabs -->
+        <!-- underlined tab strip for the inner tabs -->
         <Style x:Key="LineTabControl" TargetType="TabControl">
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="0"/>
@@ -334,7 +314,7 @@
             </Setter>
         </Style>
 
-        <!-- preview grid cell text: the word "Varies" becomes an orange pill -->
+        <!-- preview grid cell: "Varies" becomes an orange pill -->
         <Style x:Key="CellText" TargetType="TextBlock">
             <Setter Property="Margin" Value="6,3"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -354,6 +334,98 @@
             <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
             <Setter Property="BorderThickness" Value="0,0,1,1"/>
         </Style>
+
+        <!-- one field of Sort & group: badge, column, A→Z toggle, remove; second line: Header / Footer / Calc / Gap -->
+        <DataTemplate x:Key="LevelRow">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="24"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
+                        HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
+                          SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
+                <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
+                              IsChecked="{Binding Descending, Mode=TwoWay}"
+                              ToolTip="Click to switch ascending / descending"/>
+                <Button Grid.Column="3" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
+                        ToolTip="Remove level"/>
+
+                <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,4,0,0">
+                    <CheckBox Content="Header" IsChecked="{Binding Header, Mode=TwoWay}" Margin="0,0,10,0"
+                              ToolTip="Bold row with the group value above each block"/>
+                    <CheckBox Content="Footer" IsChecked="{Binding Footer, Mode=TwoWay}" Margin="0,0,6,0"
+                              ToolTip="Totals row at the end of each block"/>
+                    <ComboBox Width="100" Height="22" ItemsSource="{Binding FooterModes}"
+                              SelectedItem="{Binding FooterMode, Mode=TwoWay}" IsEnabled="{Binding Footer}"
+                              ToolTip="What the footer calculates. Per field uses the Calculation set in the Formatting tab."
+                              Margin="0,0,10,0"/>
+                    <CheckBox Content="Gap row" IsChecked="{Binding Gap, Mode=TwoWay}"
+                              ToolTip="Blank row after this level's blocks"/>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- one element of the Appearance tab -->
+        <DataTemplate x:Key="ElemRow">
+            <Border BorderBrush="{StaticResource LineSoft}" BorderThickness="0,0,0,1" Padding="0,4,0,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="110"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <CheckBox Content="Bold" IsChecked="{Binding Bold, Mode=TwoWay}" Margin="0,0,8,0"/>
+                        <CheckBox Content="Italic" IsChecked="{Binding Italic, Mode=TwoWay}" Margin="0,0,8,0"/>
+                        <CheckBox Content="Underline" IsChecked="{Binding Underline, Mode=TwoWay}" Margin="0,0,8,0"/>
+                        <CheckBox Content="Lines" IsChecked="{Binding Lines, Mode=TwoWay}"/>
+                    </StackPanel>
+
+                    <ComboBox Grid.Row="1" Grid.Column="0" Height="22" Margin="0,4,0,0"
+                            ItemsSource="{Binding CaseItems}" SelectedItem="{Binding Case, Mode=TwoWay}"/>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button Tag="text" Width="26" Height="20" Background="{Binding TextBrush}"
+                                BorderBrush="{StaticResource Line}" ToolTip="Text colour" Margin="0,0,4,0"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="text" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <Button Tag="bg" Width="26" Height="20" Background="{Binding BgBrush}"
+                                BorderBrush="{StaticResource Line}" ToolTip="Background colour" Margin="0,0,4,0"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="background" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <Button Tag="bgnone" Content="none" Style="{StaticResource LinkButton}" Margin="2,0,0,0"
+                                ToolTip="Remove the background colour"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0"
+                                Visibility="{Binding HasAlign, Converter={StaticResource B2V}}">
+                        <TextBlock Style="{StaticResource Hint}" Text="align" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox Width="100" Height="22" ItemsSource="{Binding AlignItems}"
+                                SelectedItem="{Binding Align, Mode=TwoWay}"/>
+                        <StackPanel Orientation="Horizontal" Visibility="{Binding HasOrient, Converter={StaticResource B2V}}">
+                            <TextBlock Style="{StaticResource Hint}" Text="orientation" VerticalAlignment="Center" Margin="14,0,6,0"/>
+                            <ComboBox Width="110" Height="22" ItemsSource="{Binding OrientItems}"
+                                    SelectedItem="{Binding Orientation, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -364,7 +436,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ================= header ================= -->
+        <!-- header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="Abaco Tables" FontSize="20" FontWeight="SemiBold"/>
             <TextBlock Style="{StaticResource Hint}"
@@ -398,20 +470,20 @@
 
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Table type"/>
                                     <ComboBox x:Name="table_type_combo" Grid.Row="0" Grid.Column="1" SelectedIndex="0"
-                                            SelectionChanged="table_type_changed">
+                                              SelectionChanged="table_type_changed">
                                         <ComboBoxItem Content="Schedule / Quantities"/>
                                         <ComboBoxItem Content="Material takeoff"/>
                                     </ComboBox>
                                     <TextBlock x:Name="table_type_note" Grid.Row="1" Grid.Column="1" Style="{StaticResource Hint}"
-                                            Margin="0,3,0,8" Text="One row per type and level (and size): count, length, height, area."/>
+                                               Margin="0,3,0,8" Text="One row per type and level (and size): count, length, height, area."/>
 
                                     <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Category"/>
                                     <ComboBox x:Name="category_combo" Grid.Row="2" Grid.Column="1"
-                                            SelectionChanged="category_changed"/>
+                                              SelectionChanged="category_changed"/>
                                     <TextBlock x:Name="category_info" Grid.Row="3" Grid.Column="1"
-                                            Style="{StaticResource Hint}" Margin="0,3,0,0"/>
+                                               Style="{StaticResource Hint}" Margin="0,3,0,0"/>
                                     <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,6,0,0"
-                                            Text="To limit the table (for example curtain walls only) use the Filter tab in Preview."/>
+                                               Text="To limit the table (for example curtain walls only) use the Filter tab in Preview."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -434,7 +506,7 @@
                                              ToolTip="Title row of the table. Leave blank for 'Abaco &lt;Category&gt;'."/>
                                     <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Table name" Margin="0,6,0,0"/>
                                     <TextBox x:Name="tb_name" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
-                                             ToolTip="Excel tab name, and the key used to find the Revit views again on the next run ('&lt;name&gt; table 1', ...)."/>
+                                             ToolTip="Excel tab name, and the key used to find the Revit views again on the next run."/>
                                     <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,4,0,0"
                                                Text="Columns, sorting and formatting are set in the Preview tab."/>
                                 </Grid>
@@ -457,22 +529,18 @@
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Sheet number prefix"/>
                                     <TextBox x:Name="tb_prefix" Grid.Row="0" Grid.Column="1"
                                              ToolTip="Only used for NEW sheets, e.g. AM gives AM-01, AM-02..."/>
                                     <TextBlock Grid.Row="0" Grid.Column="3" Style="{StaticResource FieldLabel}" Text="Title block"/>
                                     <ComboBox x:Name="cmb_titleblock" Grid.Row="0" Grid.Column="4"/>
-                                    <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Text height (mm)" Margin="0,6,0,0"/>
-                                    <TextBox x:Name="tb_text_mm" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
-                                             ToolTip="Text height on the printed sheet."/>
-                                    <TextBlock Grid.Row="1" Grid.Column="3" Style="{StaticResource FieldLabel}"
-                                               Text="Max table height (mm)" Margin="0,6,0,0"/>
-                                    <TextBox x:Name="tb_page_h" Grid.Row="1" Grid.Column="4" Margin="0,6,0,0"
+                                    <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Max table height (mm)" Margin="0,6,0,0"/>
+                                    <TextBox x:Name="tb_page_h" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
                                              ToolTip="Maximum table height per page. Type blocks are never split across pages."/>
-                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Style="{StaticResource Hint}" Margin="0,6,0,0"
-                                               Text="Re-running updates the existing views in place (their sheet placement is kept). Sheets are only created the first time."/>
+                                    <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Style="{StaticResource Hint}"
+                                               Margin="0,6,0,0" VerticalAlignment="Center"
+                                               Text="Text size and style: Appearance tab."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -508,7 +576,7 @@
             </TabItem>
 
             <!-- ============================================================ -->
-            <!-- PREVIEW: left = Fields / Sorting / Formatting, right = live table -->
+            <!-- PREVIEW: left = edit tabs, right = live table                -->
             <!-- ============================================================ -->
             <TabItem Header="Preview">
                 <Grid Margin="0,10,0,0">
@@ -532,16 +600,14 @@
                                         <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
 
-                                    <!-- Fields list header -->
                                     <DockPanel Grid.Row="0" Margin="0,0,0,6">
                                         <Button DockPanel.Dock="Right" Content="Reset" Style="{StaticResource LinkButton}"
                                                 Click="fields_reset_click" VerticalAlignment="Center"/>
                                         <TextBlock x:Name="fields_count" DockPanel.Dock="Right" Style="{StaticResource Hint}"
-                                                Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                                   Margin="0,0,12,0" VerticalAlignment="Center"/>
                                         <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Table fields"/>
                                     </DockPanel>
 
-                                    <!-- Fields list (scrollable) -->
                                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                                         <ItemsControl x:Name="fields_list">
                                             <ItemsControl.ItemTemplate>
@@ -557,8 +623,9 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
+                                                        <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"/>
                                                         <TextBlock Grid.Column="2" Text="{Binding Label}" VerticalAlignment="Center"
-                                                                TextTrimming="CharacterEllipsis"/>
+                                                                   TextTrimming="CharacterEllipsis"/>
                                                         <Border Grid.Column="3" Style="{StaticResource ChipInfo}"
                                                                 Visibility="{Binding HasScope, Converter={StaticResource B2V}}">
                                                             <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
@@ -575,12 +642,9 @@
                                         </ItemsControl>
                                     </ScrollViewer>
 
-                                    <!-- Draggable splitter -->
                                     <GridSplitter Grid.Row="2" Height="2" HorizontalAlignment="Stretch" VerticalAlignment="Center"
-                                                Background="{StaticResource LineSoft}" Cursor="SizeNS"
-                                                Margin="0,4,0,4" ShowsPreview="True"/>
+                                                  Background="{StaticResource LineSoft}" Cursor="SizeNS" Margin="0,4,0,4" ShowsPreview="True"/>
 
-                                    <!-- Add parameter section (scrollable) -->
                                     <Grid Grid.Row="3">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -588,18 +652,11 @@
                                             <RowDefinition Height="*"/>
                                         </Grid.RowDefinitions>
 
-                                        <TextBlock Grid.Row="0"
-                                                Style="{StaticResource CardTitle}"
-                                                Text="Add parameter"/>
+                                        <TextBlock Grid.Row="0" Style="{StaticResource CardTitle}" Text="Add parameter"/>
+                                        <TextBox Grid.Row="1" x:Name="tb_param_search" TextChanged="param_search_changed"
+                                                 ToolTip="Search the parameters found on this category"/>
 
-                                        <TextBox Grid.Row="1"
-                                                x:Name="tb_param_search"
-                                                TextChanged="param_search_changed"
-                                                ToolTip="Search the parameters found on this category"/>
-
-                                        <ScrollViewer Grid.Row="2"
-                                                    VerticalScrollBarVisibility="Auto"
-                                                    Margin="0,4,0,0">
+                                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
                                             <ItemsControl x:Name="suggest_list">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
@@ -609,21 +666,12 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-
-                                                            <TextBlock Text="{Binding Label}"
-                                                                    VerticalAlignment="Center"
-                                                                    TextTrimming="CharacterEllipsis"/>
-
-                                                            <Border Grid.Column="1"
-                                                                    Style="{StaticResource ChipInfo}">
-                                                                <TextBlock Style="{StaticResource ChipText}"
-                                                                        Text="{Binding ScopeText}"/>
+                                                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis"/>
+                                                            <Border Grid.Column="1" Style="{StaticResource ChipInfo}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
                                                             </Border>
-
-                                                            <Button Grid.Column="2"
-                                                                    Tag="add"
-                                                                    Content="+"
-                                                                    Style="{StaticResource MiniButton}"
+                                                            <Button Grid.Column="2" Tag="add" Content="+" Style="{StaticResource MiniButton}"
                                                                     ToolTip="Add to table"/>
                                                         </Grid>
                                                     </DataTemplate>
@@ -631,7 +679,6 @@
                                             </ItemsControl>
                                         </ScrollViewer>
                                     </Grid>
-
                                 </Grid>
                             </TabItem>
 
@@ -648,17 +695,11 @@
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <TextBlock Style="{StaticResource FieldLabel}" Text="Match" Margin="0,0,8,0"/>
                                             <RadioButton x:Name="filter_all" GroupName="fmatch" Style="{StaticResource Seg}"
-                                                        Content="All (AND)" IsChecked="True" Click="filter_match_click"/>
+                                                         Content="All (AND)" IsChecked="True" Click="filter_match_click"/>
                                             <RadioButton x:Name="filter_any" GroupName="fmatch" Style="{StaticResource Seg}"
-                                                        Content="Any (OR)" Click="filter_match_click"/>
+                                                         Content="Any (OR)" Click="filter_match_click"/>
                                         </StackPanel>
-                                        <StackPanel x:Name="filter_quick" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
-                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Quick" Margin="0,0,8,0"/>
-                                            <Button Content="Curtain walls only" Style="{StaticResource LinkButton}" Margin="0,0,12,0"
-                                                    Click="filter_curtain_only_click"/>
-                                            <Button Content="Exclude curtain walls" Style="{StaticResource LinkButton}"
-                                                    Click="filter_no_curtain_click"/>
-                                        </StackPanel>
+
                                         <ItemsControl x:Name="filter_list">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -677,21 +718,25 @@
                                                             <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
                                                                     HorizontalAlignment="Left" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
-                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                             </Border>
                                                             <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
-                                                                    SelectedItem="{Binding Column, Mode=TwoWay}"/>
+                                                                      SelectedItem="{Binding Column, Mode=TwoWay}"/>
                                                             <Button Grid.Column="2" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
                                                                     ToolTip="Remove condition"/>
                                                             <ComboBox Grid.Row="1" Grid.Column="1" Height="24" Margin="0,4,0,0"
-                                                                    ItemsSource="{Binding Operators}"
-                                                                    SelectedItem="{Binding Operator, Mode=TwoWay}"/>
+                                                                      ItemsSource="{Binding Operators}"
+                                                                      SelectedItem="{Binding Operator, Mode=TwoWay}"/>
+                                                            <ComboBox Grid.Row="1" Grid.Column="2" Width="110" Height="24" Margin="6,4,0,0"
+                                                                      IsEditable="True" ItemsSource="{Binding Suggestions}"
+                                                                      Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                      Visibility="{Binding IsExact, Converter={StaticResource B2V}}"/>
                                                             <TextBox Grid.Row="1" Grid.Column="2" Width="110" Height="24" Margin="6,4,0,0"
-                                                                    Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                                    Visibility="{Binding NeedsValue, Converter={StaticResource B2V}}"/>
+                                                                     Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                     Visibility="{Binding IsText, Converter={StaticResource B2V}}"/>
                                                             <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource Hint}"
-                                                                    Foreground="{StaticResource WarnText}" Text="{Binding Error}"
-                                                                    Visibility="{Binding HasError, Converter={StaticResource B2V}}"/>
+                                                                       Foreground="{StaticResource WarnText}" Text="{Binding Error}"
+                                                                       Visibility="{Binding HasError, Converter={StaticResource B2V}}"/>
                                                         </Grid>
                                                     </Border>
                                                 </DataTemplate>
@@ -703,107 +748,40 @@
 
                                         <TextBlock x:Name="filter_status" Style="{StaticResource Hint}" Margin="0,10,0,0"/>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
-                                                Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
+                                                   Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
-                            
-                            <!-- Grouping -->
-                            <TabItem Header="Grouping" Style="{StaticResource LineTab}">
+
+                            <!-- Sort & group -->
+                            <TabItem Header="Sort &amp; group" Style="{StaticResource LineTab}">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel Margin="12,10,12,12">
+
                                         <DockPanel Margin="0,0,0,6">
                                             <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
-                                                    Click="group_clear_click" VerticalAlignment="Center"/>
-                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Group by"/>
+                                                    Click="level_clear_click" VerticalAlignment="Center"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort and group levels"/>
                                         </DockPanel>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
-                                                Text="A new block (blank row between blocks) starts whenever one of these values changes. Groups are ordered first; the Sorting levels apply inside each group."/>
-                                        <ItemsControl x:Name="group_list">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Height="32">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="24"/>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
-                                                                HorizontalAlignment="Left">
-                                                            <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
-                                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
-                                                                SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
-                                                        <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
-                                                                    IsChecked="{Binding Descending, Mode=TwoWay}"
-                                                                    ToolTip="Click to switch ascending / descending"/>
-                                                        <Button Grid.Column="3" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Remove group"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                        <Button Content="+ Add group" Style="{StaticResource SecondaryButton}" Padding="12,4"
-                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="group_add_click"/>
+                                                   Text="The first level is the outermost. Each level sorts the rows; its Header, Footer and Gap row add structure around each group of that level. Footer needs a calculation set on a field (Formatting tab)."/>
+                                        <ItemsControl x:Name="level_list" ItemTemplate="{StaticResource LevelRow}"/>
+                                        <Button Content="+ Add level" Style="{StaticResource SecondaryButton}" Padding="12,4"
+                                                HorizontalAlignment="Left" Margin="0,6,0,0" Click="level_add_click"/>
 
-                                        <Separator Margin="0,12,0,8" Background="{StaticResource LineSoft}"/>
-
-                                        <CheckBox x:Name="chk_group_totals" Content="Totals for each group" IsChecked="True" Margin="0,0,0,6"
-                                                Checked="options_changed" Unchecked="options_changed"/>
-                                        <CheckBox x:Name="chk_grand_totals" Content="Grand totals" Margin="0,0,0,6"
-                                                Checked="options_changed" Unchecked="options_changed"/>
+                                        <CheckBox x:Name="chk_grand_totals" Content="Header summary (Total, Min, Max)" Margin="0,12,0,6"
+                                                  Checked="options_changed" Unchecked="options_changed"/>
                                         <CheckBox x:Name="chk_itemize" Content="Itemize every instance"
-                                                Checked="options_changed" Unchecked="options_changed"/>
+                                                  Checked="options_changed" Unchecked="options_changed"/>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0">
                                             <Run Text="Off: identical elements are merged into one row; a column whose values differ inside a row shows "/>
                                             <Run Text="Varies" FontStyle="Italic" Foreground="{StaticResource WarnText}"/>
-                                            <Run Text=". Grouping by an instance field splits the rows instead. On: one row per element."/>
+                                            <Run Text=". On: one row per element."/>
                                         </TextBlock>
-                                    </StackPanel>
-                                </ScrollViewer>
-                            </TabItem>
 
-                            <!-- Sorting -->
-                            <TabItem Header="Sorting" Style="{StaticResource LineTab}">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <StackPanel Margin="12,10,12,12">
-                                        <DockPanel Margin="0,0,0,6">
-                                            <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource LinkButton}"
-                                                    Click="sort_clear_click" VerticalAlignment="Center"/>
-                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Sort by (inside each group)"/>
-                                        </DockPanel>
-                                        <ItemsControl x:Name="sort_list">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Height="32">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="24"/>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <Border Width="16" Height="16" CornerRadius="8" Background="{StaticResource Accent}"
-                                                                HorizontalAlignment="Left">
-                                                            <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10"
-                                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Border>
-                                                        <ComboBox Grid.Column="1" Height="24" ItemsSource="{Binding Columns}"
-                                                                SelectedItem="{Binding Column, Mode=TwoWay}" Margin="0,0,8,0"/>
-                                                        <ToggleButton Grid.Column="2" Style="{StaticResource DirToggle}"
-                                                                    IsChecked="{Binding Descending, Mode=TwoWay}"
-                                                                    ToolTip="Click to switch ascending / descending"/>
-                                                        <Button Grid.Column="3" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Remove level"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
-                                        
 
                             <!-- Formatting -->
                             <TabItem Header="Formatting" Style="{StaticResource LineTab}">
@@ -834,8 +812,7 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
-                                                                   TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                                         <Border Grid.Column="1" Style="{StaticResource Chip}">
                                                             <TextBlock Style="{StaticResource ChipText}" Text="{Binding AlignChip}"/>
                                                         </Border>
@@ -869,41 +846,32 @@
                                                 <RowDefinition Height="34"/>
                                                 <RowDefinition Height="34"/>
                                                 <RowDefinition Height="34"/>
-                                                <RowDefinition Height="34"/>
                                             </Grid.RowDefinitions>
 
                                             <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Heading"/>
                                             <TextBox x:Name="fmt_heading" Grid.Row="0" Grid.Column="1" TextChanged="fmt_heading_changed"/>
 
-                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Heading orientation"/>
+                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Alignment (data)"/>
                                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <RadioButton x:Name="orient_h" GroupName="orient" Style="{StaticResource Seg}"
-                                                             Tag="horizontal" Content="Horizontal" IsChecked="True" Click="orient_click"/>
-                                                <RadioButton x:Name="orient_v" GroupName="orient" Style="{StaticResource Seg}"
-                                                             Tag="vertical" Content="Vertical" Click="orient_click"/>
-                                            </StackPanel>
-
-                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Alignment"/>
-                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <RadioButton x:Name="align_l" GroupName="align" Style="{StaticResource Seg}"
-                                                             Tag="left" Content="Left" IsChecked="True" Click="align_click"/>
+                                                            Tag="left" Content="Left" IsChecked="True" Click="align_click"/>
                                                 <RadioButton x:Name="align_c" GroupName="align" Style="{StaticResource Seg}"
-                                                             Tag="center" Content="Center" Click="align_click"/>
+                                                            Tag="center" Content="Center" Click="align_click"/>
                                                 <RadioButton x:Name="align_r" GroupName="align" Style="{StaticResource Seg}"
-                                                             Tag="right" Content="Right" Click="align_click"/>
+                                                            Tag="right" Content="Right" Click="align_click"/>
                                             </StackPanel>
 
-                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Column width (Revit)"/>
-                                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Column width (Revit)"/>
+                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <TextBox x:Name="fmt_width" Width="56" TextChanged="fmt_width_changed"
-                                                         ToolTip="Column width on the sheet, in mm"/>
+                                                        ToolTip="Column width on the sheet, in mm"/>
                                                 <TextBlock Style="{StaticResource Hint}" Margin="6,0,10,0" VerticalAlignment="Center" Text="mm"/>
                                                 <CheckBox x:Name="fmt_auto" Content="Auto" IsChecked="True" Click="fmt_auto_click"/>
                                             </StackPanel>
 
-                                            <TextBlock Grid.Row="4" Style="{StaticResource FieldLabel}" Text="Calculation"/>
-                                            <ComboBox x:Name="fmt_calc" Grid.Row="4" Grid.Column="1" SelectedIndex="0"
-                                                      SelectionChanged="fmt_calc_changed">
+                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Calculation"/>
+                                            <ComboBox x:Name="fmt_calc" Grid.Row="3" Grid.Column="1" SelectedIndex="0"
+                                                    SelectionChanged="fmt_calc_changed">
                                                 <ComboBoxItem Tag="none" Content="None"/>
                                                 <ComboBoxItem Tag="total" Content="Calculate totals"/>
                                                 <ComboBoxItem Tag="min" Content="Minimum"/>
@@ -919,6 +887,83 @@
                                                    Text="Hidden field leaves the column out of the Revit table. Show in Excel decides whether it is written to the workbook. A column hidden in Revit but off in Excel is still available for sorting."/>
                                     </StackPanel>
                                 </Grid>
+                            </TabItem>
+
+                            <!-- Appearance -->
+                            <TabItem Header="Appearance" Style="{StaticResource LineTab}">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="12,10,12,12">
+
+                                        <TextBlock Style="{StaticResource CardTitle}" Text="Look"/>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="120"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Theme"/>
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
+                                                <ComboBox x:Name="theme_combo" Width="150" SelectionChanged="theme_changed"/>
+                                                <StackPanel x:Name="accent_panel" Orientation="Horizontal" Visibility="Collapsed">
+                                                    <Button x:Name="sw_accent" Tag="accent" Width="26" Height="20" Margin="10,0,6,0"
+                                                            BorderBrush="{StaticResource Line}" ToolTip="Accent colour (used by the Accent theme)"
+                                                            Click="swatch_click"/>
+                                                    <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" Text="accent colour"/>
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Font"/>
+                                            <ComboBox x:Name="cmb_font" Grid.Row="1" Grid.Column="1" Width="220" HorizontalAlignment="Left"
+                                                    SelectionChanged="font_changed"/>
+
+                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Font size (mm)"/>
+                                            <TextBox x:Name="tb_font_mm" Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left"
+                                                    TextChanged="font_size_changed" ToolTip="Text height in mm (Revit's unit)"/>
+
+                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Wrap text"/>
+                                            <CheckBox x:Name="chk_wrap" Grid.Row="3" Grid.Column="1" Content="Wrap text in all cells"
+                                                    Click="app_check_click"/>
+
+                                            <TextBlock Grid.Row="4" Style="{StaticResource FieldLabel}" Text="Blank row (Revit, mm)"/>
+                                            <TextBox x:Name="tb_blank_mm" Grid.Row="4" Grid.Column="1" Width="70" HorizontalAlignment="Left"
+                                                    TextChanged="blank_changed"/>
+                                        </Grid>
+
+                                        <TextBlock Style="{StaticResource CardTitle}" Text="Elements"/>
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                                                   Text="Case changes the display only. Black &amp; white: title in capitals, headings in title case, summaries in sentence case."/>
+                                        <ItemsControl x:Name="elem_list" ItemTemplate="{StaticResource ElemRow}"/>
+
+                                        <TextBlock Style="{StaticResource CardTitle}" Text="Zebra and lines" Margin="0,12,0,6"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <CheckBox x:Name="chk_zebra" Content="Zebra striping" Margin="0,0,8,0" Click="app_check_click"/>
+                                            <Button x:Name="sw_zebra" Tag="zebra" Width="26" Height="20" BorderBrush="{StaticResource Line}"
+                                                    Click="swatch_click" ToolTip="Zebra colour"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Lines" Margin="0,0,8,0"/>
+                                            <Button x:Name="sw_lines" Tag="lines" Width="26" Height="20" BorderBrush="{StaticResource Line}"
+                                                    Click="swatch_click" ToolTip="Line colour"/>
+                                            <CheckBox x:Name="chk_lines_outer" Content="Outer" Margin="10,0,10,0" Click="app_check_click"/>
+                                            <CheckBox x:Name="chk_lines_inner" Content="Inner" Click="app_check_click"/>
+                                        </StackPanel>
+
+                                        <TextBlock Style="{StaticResource CardTitle}" Text="Excel only" Margin="0,12,0,6"/>
+                                        <CheckBox x:Name="chk_freeze" Content="Freeze the title and heading rows" Margin="0,0,0,4"
+                                                  Click="app_check_click"/>
+                                        <CheckBox x:Name="chk_gridlines" Content="Show gridlines" Click="app_check_click"/>
+
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,12,0,0"
+                                                  Text="Data rows take their alignment from each field in Formatting. Revit does not draw text colour; Excel and the preview do. Revit draws backgrounds, zebra striping and line colour."/>
+                                    </StackPanel>
+                                </ScrollViewer>
                             </TabItem>
 
                         </TabControl>
@@ -945,15 +990,18 @@
                         </DockPanel>
 
                         <!-- As Excel -->
-                        <Border x:Name="excel_host" Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                Background="White">
-                            <DataGrid x:Name="preview_grid" AutoGenerateColumns="False" IsReadOnly="True"
-                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                      HorizontalGridLinesBrush="#E6E8EC" Background="White" BorderThickness="0"
-                                      CanUserAddRows="False" CanUserSortColumns="False" RowHeaderWidth="0"
-                                      ColumnHeaderStyle="{StaticResource GridHeader}"
-                                      LoadingRow="preview_loading_row"/>
-                        </Border>
+                        <DockPanel x:Name="excel_host" Grid.Row="1">
+                            <TextBlock x:Name="preview_title" DockPanel.Dock="Top" TextAlignment="Center"
+                                    TextWrapping="Wrap" Margin="0,0,0,4"/>
+                            <Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="White">
+                                <DataGrid x:Name="preview_grid" AutoGenerateColumns="False" IsReadOnly="True"
+                                        HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                        HorizontalGridLinesBrush="#E6E8EC" Background="White" BorderThickness="0"
+                                        CanUserAddRows="False" CanUserSortColumns="False" RowHeaderWidth="0"
+                                        ColumnHeaderStyle="{StaticResource GridHeader}"
+                                        LoadingRow="preview_loading_row"/>
+                            </Border>
+                        </DockPanel>
 
                         <!-- As Revit -->
                         <Grid x:Name="revit_host" Grid.Row="1" Visibility="Collapsed">
@@ -977,8 +1025,7 @@
                             </WrapPanel>
                             <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                                           Background="#E3E7ED">
-                                <Border Background="White" Padding="14" Margin="14" HorizontalAlignment="Left"
-                                        VerticalAlignment="Top">
+                                <Border Background="White" Padding="14" Margin="14" HorizontalAlignment="Left" VerticalAlignment="Top">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.25"/>
                                     </Border.Effect>
@@ -994,14 +1041,14 @@
             </TabItem>
         </TabControl>
 
-        <!-- ================= log ================= -->
+        <!-- log -->
         <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,10,0,10" Padding="8">
             <TextBox x:Name="log_box" Height="96" IsReadOnly="True" BorderThickness="0"
                      FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
         </Border>
 
-        <!-- ================= buttons ================= -->
+        <!-- buttons -->
         <DockPanel Grid.Row="3" LastChildFill="False">
             <TextBlock x:Name="status_text" DockPanel.Dock="Left" Style="{StaticResource Hint}"
                        VerticalAlignment="Center" Text="Ready"/>

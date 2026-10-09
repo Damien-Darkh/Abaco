@@ -12,9 +12,9 @@ from pyrevit import forms, script, revit
 from pyrevit.forms import WPFWindow
 from Autodesk.Revit import DB
 from System import Action, Double
-from System.Windows import RoutedEventHandler, Visibility, FontWeights
+from System.Windows import RoutedEventHandler, Visibility, FontWeights, FontStyles
 from System.Windows.Controls import Button
-from System.Windows.Media import SolidColorBrush, Color
+from System.Windows.Media import SolidColorBrush, Color, FontFamily
 from System.Windows.Threading import DispatcherPriority
 
 from abaco import revit_reader as rr
@@ -26,12 +26,14 @@ from abaco import filters
 from abaco.filter_ui import FilterTab
 from abaco.layout import build_layout
 from abaco.records import K_IS_CURTAIN
+from abaco import appearance as AP
+from abaco import color_picker
+from abaco.sheet import build_sheet
 
 doc = revit.doc
 
 DEFAULTS = {
     "prefix": u"AM",
-    "text_mm": u"2.5",
     "page_h": u"490",
     "excel_path": os.path.join(os.path.expanduser("~"), "Documents", "Abaco_tables.xlsx"),
 }
@@ -54,6 +56,7 @@ class AbacoWindow(WPFWindow):
     _loading_fmt = False
     filter_tab = None            # created in __init__; XAML events may fire before that
     filter_result = None
+    _loading_app = False
 
     def __init__(self):
         WPFWindow.__init__(self, script.get_bundle_file("ui.xaml"))
@@ -68,8 +71,8 @@ class AbacoWindow(WPFWindow):
         # one container-level handler per list (XamlReader cannot wire handlers inside DataTemplates)
         self.fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
         self.suggest_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.suggest_row_click))
-        self.sort_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.sort_row_click))
-        self.group_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.group_row_click))
+        self.level_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.level_row_click))
+        self.elem_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.elem_row_click))
         self.filter_tab = FilterTab(self.filter_list, self.filter_status, self.filter_all, self.filter_any,
                                     on_change=self.refresh_preview)
         self.tabs.SelectionChanged += self.tabs_changed
@@ -100,7 +103,6 @@ class AbacoWindow(WPFWindow):
         self.cmb_titleblock.ItemsSource = [u"(no title block)"] + [t[0] for t in self._tb_items]
         self.cmb_titleblock.SelectedIndex = 1 if self._tb_items else 0
         self.tb_prefix.Text = DEFAULTS["prefix"]
-        self.tb_text_mm.Text = DEFAULTS["text_mm"]
         self.tb_page_h.Text = DEFAULTS["page_h"]
         self.tb_path.Text = DEFAULTS["excel_path"]
 
@@ -134,17 +136,15 @@ class AbacoWindow(WPFWindow):
         self.status(u"Error: see the log")
 
     def text_and_page(self):
-        """(text height mm, page height mm); falls back on the defaults while a box holds nonsense."""
-        out = []
-        for ctrl, key in ((self.tb_text_mm, "text_mm"), (self.tb_page_h, "page_h")):
-            try:
-                v = US.parse_decimal(ctrl.Text)
-                if v <= 0:
-                    raise ValueError()
-            except ValueError:
-                v = float(DEFAULTS[key])
-            out.append(v)
-        return out[0], out[1]
+        """(text height mm from Appearance, page height mm from Settings)."""
+        text_mm = float(self.state.app()["font"]["sizeMm"]) if self.state is not None else 2.5
+        try:
+            page_h = US.parse_decimal(self.tb_page_h.Text)
+            if page_h <= 0:
+                raise ValueError()
+        except ValueError:
+            page_h = float(DEFAULTS["page_h"])
+        return text_mm, page_h
 
     # ----------------------------------------------------------------------------- model and state
     def table_type(self):
@@ -168,14 +168,13 @@ class AbacoWindow(WPFWindow):
         self.status(u"Reading the model...")
         self.log(u"Reading %s..." % cat.Name)
         self.rs = rr.read_category(doc, cat, self.log)
-        self.filter_tab.set_catalogue(self.rs)       # keeps the conditions on Re-read model
         for line in self.rs.summary_lines():
             self.log(line)
         self.category_info.Text = self.rs.summary_lines()[0]
-        self.filter_quick.Visibility = Visibility.Visible if self.rs.has_field(K_IS_CURTAIN) else Visibility.Collapsed
         self.table_type_note.Text = self.type_note()
         self.state = US.EditState(self.rs, old if old is not None else self.default_settings())
         self.bind_all()
+        self.sync_lists()
         self.status(u"Ready")
 
     @staticmethod
@@ -186,9 +185,10 @@ class AbacoWindow(WPFWindow):
         s = self.state.settings
         s["title"] = self.tb_title.Text.strip()
         flt = self.filter_tab.to_settings()
-        keys = P.required_keys(s) + filters.needed_keys(flt)
+        allowed = self.state.table_keys()
+        keys = P.required_keys(s) + [k for k in filters.needed_keys(flt) if k in allowed]
         rr.ensure_values(doc, self.rs, [k for k in keys if k], self.log)
-        fr = filters.apply_filters(self.rs, self.rs.elements, flt)
+        fr = filters.apply_filters(self.rs, self.rs.elements, flt, allowed)
         self.filter_result = fr
         self.filter_tab.show_result(fr)               # per-row errors + "n of N elements match"
         if fr.n_active and fr.matched == 0:
@@ -199,13 +199,13 @@ class AbacoWindow(WPFWindow):
     # --------------------------------------------------------------------------- binding the lists
     def bind_all(self):
         self.bind_fields()
-        self.bind_sort()
+        self.bind_levels()
         self.bind_options()
         self.bind_format()
-        self.bind_group()
+        self.bind_appearance()
 
-    def bind_group(self):
-        self.group_list.ItemsSource = self.state.group_rows(self.row_changed)
+    def bind_levels(self):
+        self.level_list.ItemsSource = self.state.level_rows(self.row_changed)
 
     def bind_fields(self):
         self.fields_list.ItemsSource = self.state.field_rows(self.row_changed)
@@ -218,10 +218,6 @@ class AbacoWindow(WPFWindow):
 
     def bind_suggest(self):
         self.suggest_list.ItemsSource = self.state.suggestions(self.tb_param_search.Text)
-
-    def bind_sort(self):
-        self.sort_list.ItemsSource = self.state.sort_rows(self.row_changed)
-        self.sort_fixed_index.Text = u"%d" % (len(self.state.settings["sort"]) + 1)
 
     def bind_options(self):
         self._loading = True
@@ -277,7 +273,9 @@ class AbacoWindow(WPFWindow):
                 res.revit.n_data_rows(), len(res.revit.columns), len(lay.pages), lay.table_w,
                 (u"   |   " + warn) if warn else u"", note)
         else:
-            self._row_kinds = PV.fill_grid(self.preview_grid, res.excel)
+            sheet = build_sheet(res.excel)
+            self._row_styles = PV.fill_grid(self.preview_grid, sheet)
+            self.show_title(sheet)
             self.preview_status.Text = u"%d rows, %d columns%s" % (
                 res.excel.n_data_rows(), len(res.excel.columns), note)
 
@@ -286,7 +284,8 @@ class AbacoWindow(WPFWindow):
         try:
             self.preview_grid.ItemsSource = None
             self.preview_grid.Columns.Clear()
-            self._row_kinds = []
+            self._row_styles = []
+            self.preview_title.Text = u""
             self.revit_canvas.Children.Clear()
             self.width_ruler.Children.Clear()
         except Exception:
@@ -312,14 +311,18 @@ class AbacoWindow(WPFWindow):
 
     def preview_loading_row(self, sender, args):
         try:
-            kind = self._row_kinds[args.Row.GetIndex()]
+            st = self._row_styles[args.Row.GetIndex()]
         except Exception:
             return
         row = args.Row
-        row.MinHeight = 0
-        row.Height = 8.0 if kind == "blank" else Double.NaN
-        row.FontWeight = FontWeights.Bold if kind == "total" else FontWeights.Normal
-        row.Background = TOTAL_BG if kind == "total" else None
+        if st["blank"]:
+            row.Height = 8.0
+            return
+        row.Height = Double.NaN
+        row.FontWeight = FontWeights.Bold if st["bold"] else FontWeights.Normal
+        row.FontStyle = FontStyles.Italic if st["italic"] else FontStyles.Normal
+        row.Foreground = US.brush(st["fg"])
+        row.Background = US.brush(st["bg"])
 
     def view_changed(self, sender, args):
         if not self._ready:
@@ -348,6 +351,16 @@ class AbacoWindow(WPFWindow):
                 self.refresh_preview()
             except Exception as ex:
                 self.fail(ex)
+
+    def show_title(self, sheet):
+        app = sheet.appearance
+        e = app["elements"]["title"]
+        self.preview_title.Text = sheet.values[0][0]
+        self.preview_title.FontFamily = FontFamily(app["font"]["family"])
+        self.preview_title.FontSize = app["font"]["sizeMm"] * 2.835 * 4.0 / 3.0
+        self.preview_title.FontWeight = FontWeights.Bold if e["bold"] else FontWeights.Normal
+        self.preview_title.FontStyle = FontStyles.Italic if e["italic"] else FontStyles.Normal
+        self.preview_title.Foreground = US.brush(e["color"])
 
     # ------------------------------------------------------------------------------ settings tab
     def category_changed(self, sender, args):
@@ -385,11 +398,11 @@ class AbacoWindow(WPFWindow):
             self.state.set_include(row.key, row.Include)
             self.update_counts()
             self.bind_format()
-        elif isinstance(row, US.GroupRow):                  # before SortRow: it is a subclass
-            self.state.group_set(row.Index - 1, label=row.Column, descending=row.Descending)
-        elif isinstance(row, US.SortRow):
-            self.state.sort_set(row.Index - 1, label=row.Column, descending=row.Descending)
+            self.sync_lists()
+        elif isinstance(row, US.LevelRow):
+            self.state.level_update(row.Index - 1, row)
         self.refresh_preview()
+
 
     def field_row_click(self, sender, args):
         btn = args.OriginalSource
@@ -409,6 +422,7 @@ class AbacoWindow(WPFWindow):
                 self.state.move(key, -1 if tag == "up" else 1)
             self.bind_fields()          # rebinds the list, the "x shown, y available" count and the suggestions
             self.bind_format()          # removed field disappears from Formatting
+            self.sync_lists()
             self.refresh_preview()
         except Exception as ex:
             self.fail(ex)
@@ -421,6 +435,7 @@ class AbacoWindow(WPFWindow):
         if self.state.add_field(row.key):
             self.bind_fields()
             self.bind_format()
+            self.sync_lists()
             self.refresh_preview()
 
     def param_search_changed(self, sender, args):
@@ -432,43 +447,42 @@ class AbacoWindow(WPFWindow):
             return
         self.state = US.EditState(self.rs, self.default_settings())
         self.bind_all()
+        self.sync_lists()
         self.refresh_preview()
 
-    # --------------------------------------------------------------------------------- sorting tab
-    def sort_row_click(self, sender, args):
+
+    # --------------------------------------------------------------------------------- sort/group tab
+    def level_row_click(self, sender, args):
         btn = args.OriginalSource
-        row = getattr(btn, "DataContext", None)
-        if getattr(btn, "Tag", None) != "remove" or row is None or self.state is None:
+        while btn is not None and not isinstance(btn, Button):
+            btn = getattr(btn, "Parent", None)
+        if btn is None or btn.Tag != "remove" or self.state is None or btn.DataContext is None:
             return
-        self.state.sort_remove(row.Index - 1)
-        self.bind_sort()
+        self.state.level_remove(btn.DataContext.Index - 1)
+        self.bind_levels()
         self.refresh_preview()
 
-    def sort_add_click(self, sender, args):
-        if self.state is None:
-            return
-        self.state.sort_add()
-        self.bind_sort()
-        self.refresh_preview()
+    def level_add_click(self, sender, args):
+        if self.state is not None:
+            self.state.level_add()
+            self.bind_levels()
+            self.refresh_preview()
 
-    def sort_clear_click(self, sender, args):
-        if self.state is None:
-            return
-        self.state.sort_clear()
-        self.bind_sort()
-        self.refresh_preview()
+    def level_clear_click(self, sender, args):
+        if self.state is not None:
+            self.state.level_clear()
+            self.bind_levels()
+            self.refresh_preview()
 
     def options_changed(self, sender, args):
         if not self._ready or self._loading or self.state is None:
             return
         s = self.state.settings
-        s["groupTotals"] = bool(self.chk_group_totals.IsChecked)
         s["grandTotals"] = bool(self.chk_grand_totals.IsChecked)
         s["itemize"] = bool(self.chk_itemize.IsChecked)
         self.bind_format()
         self.refresh_preview()
 
-    # --------------------------------------------------------------------------------- grouping tab
     def table_type_changed(self, sender, args):
         if not self._ready:
             return
@@ -478,27 +492,6 @@ class AbacoWindow(WPFWindow):
         self.state = US.EditState(self.rs, self.default_settings())   # new template, no rescan
         self.bind_all()
         self.refresh_preview()
-
-    def group_row_click(self, sender, args):
-        btn = args.OriginalSource
-        row = getattr(btn, "DataContext", None)
-        if getattr(btn, "Tag", None) != "remove" or row is None or self.state is None:
-            return
-        self.state.group_remove(row.Index - 1)
-        self.bind_group()
-        self.refresh_preview()
-
-    def group_add_click(self, sender, args):
-        if self.state is not None:
-            self.state.group_add()
-            self.bind_group()
-            self.refresh_preview()
-
-    def group_clear_click(self, sender, args):
-        if self.state is not None:
-            self.state.group_clear()
-            self.bind_group()
-            self.refresh_preview()
 
 
     # ------------------------------------------------------------------------------------ filter tab
@@ -513,14 +506,6 @@ class AbacoWindow(WPFWindow):
     def filter_match_click(self, sender, args):
         if self._ready and self.filter_tab is not None:
             self.filter_tab.changed()
-
-    def filter_curtain_only_click(self, sender, args):
-        if self.filter_tab is not None and self.rs is not None:
-            self.filter_tab.set_condition(K_IS_CURTAIN, u"eq", u"Yes")
-
-    def filter_no_curtain_click(self, sender, args):
-        if self.filter_tab is not None and self.rs is not None:
-            self.filter_tab.set_condition(K_IS_CURTAIN, u"ne", u"Yes")
 
     # ------------------------------------------------------------------------------ formatting tab
     def _fmt_key(self):
@@ -543,8 +528,6 @@ class AbacoWindow(WPFWindow):
             self.fmt_panel.IsEnabled = True
             self.fmt_title.Text = u"Format: %s" % self.state.label(key)
             self.fmt_heading.Text = v["heading"]
-            self.orient_v.IsChecked = (v["orientation"] == "vertical")
-            self.orient_h.IsChecked = not self.orient_v.IsChecked
             self.align_l.IsChecked = (v["align"] == "left")
             self.align_c.IsChecked = (v["align"] == "center")
             self.align_r.IsChecked = (v["align"] == "right")
@@ -628,6 +611,160 @@ class AbacoWindow(WPFWindow):
         self._apply_format(hiddenInRevit=bool(self.fmt_hidden.IsChecked),
                            showInExcel=bool(self.fmt_excel.IsChecked))
 
+
+    # ------------------------------------------------------------------------- appearance tab
+    def app_guard(self):
+        return not self._ready or self._loading_app or self.state is None
+
+    def bind_appearance(self):
+        if self.state is None:
+            return
+        app = self.state.app()
+        self._loading_app = True
+        try:
+            codes = [c for _, c in AP.THEMES]
+            self.theme_combo.ItemsSource = [l for l, _ in AP.THEMES]
+            self.theme_combo.SelectedIndex = codes.index(app["theme"]) if app["theme"] in codes else len(codes) - 1
+            self.accent_panel.Visibility = Visibility.Visible if app["theme"] == "accent" else Visibility.Collapsed
+            self.cmb_font.ItemsSource = US.installed_fonts()
+            self.cmb_font.SelectedItem = app["font"]["family"]
+            self.tb_font_mm.Text = u"%g" % app["font"]["sizeMm"]
+            self.chk_wrap.IsChecked = bool(app["wrap"])
+            self.tb_blank_mm.Text = u"%g" % app["blankMm"]
+            self.sw_accent.Background = US.brush(app["accent"])
+            self.chk_zebra.IsChecked = bool(app["zebra"]["on"])
+            self.sw_zebra.Background = US.brush(app["zebra"]["color"])
+            self.sw_lines.Background = US.brush(app["lines"]["color"])
+            self.chk_lines_outer.IsChecked = bool(app["lines"]["outer"])
+            self.chk_lines_inner.IsChecked = bool(app["lines"]["inner"])
+            self.chk_freeze.IsChecked = bool(app["excel"]["freezeHeading"])
+            self.chk_gridlines.IsChecked = bool(app["excel"]["gridlines"])
+            self.elem_list.ItemsSource = self.state.app_element_rows(self.app_row_changed)
+        finally:
+            self._loading_app = False
+
+    def theme_changed(self, sender, args):
+        if self.app_guard():
+            return
+        code = AP.THEMES[self.theme_combo.SelectedIndex][1]
+        if code == "custom":
+            return
+        self.state.app_theme(code)
+        self.bind_appearance()
+        self.refresh_preview()
+
+    def font_changed(self, sender, args):
+        if self.app_guard() or self.cmb_font.SelectedItem is None:
+            return
+        item = self.cmb_font.SelectedItem
+        if item == US.FONT_SEP:                       # separator: keep the current font
+            self._loading_app = True
+            try:
+                self.cmb_font.SelectedItem = self.state.app()["font"]["family"]
+            finally:
+                self._loading_app = False
+            return
+        self.state.app_set(("font", "family"), item)
+        self.bind_appearance()
+        self.refresh_preview()
+
+    def _num(self, ctrl, lo, hi):
+        try:
+            v = US.parse_decimal(ctrl.Text)
+        except ValueError:
+            return None
+        return v if lo <= v <= hi else None
+
+    def font_size_changed(self, sender, args):
+        if self.app_guard():
+            return
+        v = self._num(self.tb_font_mm, 1.0, 10.0)
+        if v is not None:
+            self.state.app_set(("font", "sizeMm"), v)
+            self.refresh_preview()
+
+    def max_auto_changed(self, sender, args):
+        if self.app_guard():
+            return
+        if not (self.tb_max_auto.Text or u"").strip():
+            self.state.app_set(("maxAutoMm",), None)          # automatic
+        else:
+            v = self._num(self.tb_max_auto, 5.0, 200.0)
+            if v is None:
+                return
+            self.state.app_set(("maxAutoMm",), v)
+        self.refresh_preview()
+
+    def blank_changed(self, sender, args):
+        if self.app_guard():
+            return
+        v = self._num(self.tb_blank_mm, 0.5, 50.0)
+        if v is not None:
+            self.state.app_set(("blankMm",), v)
+            self.refresh_preview()
+
+    def app_check_click(self, sender, args):
+        if self.app_guard():
+            return
+        path = {"chk_wrap": ("wrap",), "chk_zebra": ("zebra", "on"),
+                "chk_lines_outer": ("lines", "outer"), "chk_lines_inner": ("lines", "inner"),
+                "chk_freeze": ("excel", "freezeHeading"), "chk_gridlines": ("excel", "gridlines")}.get(sender.Name)
+        if path is None:
+            return
+        self.state.app_set(path, bool(sender.IsChecked))
+        self.bind_appearance()
+        self.refresh_preview()
+
+    def swatch_click(self, sender, args):
+        """Accent, zebra and line colours."""
+        if self.app_guard():
+            return
+        app = self.state.app()
+        tag = sender.Tag
+        current = {"accent": app["accent"], "zebra": app["zebra"]["color"], "lines": app["lines"]["color"]}[tag]
+        new = color_picker.pick(current)
+        if not new:
+            return
+        if tag == "accent":
+            app["accent"] = new
+            if app["theme"] == "accent":
+                self.state.app_theme("accent")
+        elif tag == "zebra":
+            self.state.app_set(("zebra", "color"), new)
+        else:
+            self.state.app_set(("lines", "color"), new)
+        self.bind_appearance()
+        self.refresh_preview()
+
+    def elem_row_click(self, sender, args):
+        """Text colour, background colour and clear-background buttons in the Elements list."""
+        btn = args.OriginalSource
+        while btn is not None and not isinstance(btn, Button):
+            btn = getattr(btn, "Parent", None)
+        if btn is None or self.state is None:
+            return
+        tag, row = btn.Tag, btn.DataContext
+        if tag not in ("text", "bg", "bgnone") or row is None:
+            return
+        if tag == "bgnone":
+            self.state.app_color(row.element, "background", None)
+        else:
+            which = "color" if tag == "text" else "background"
+            current = self.state.app()["elements"][row.element][which] or "#FFFFFF"
+            new = color_picker.pick(current)
+            if not new:
+                return
+            self.state.app_color(row.element, which, new)
+        self.bind_appearance()
+        self.refresh_preview()
+
+    def app_row_changed(self, row, name):
+        if self.app_guard():
+            return
+        self.state.app_element_update(row)
+        self.refresh_preview()
+
+
     # ------------------------------------------------------------------------------------------ run
     def validate(self):
         errs, v = [], {}
@@ -637,14 +774,12 @@ class AbacoWindow(WPFWindow):
         v["name"] = self.tb_name.Text.strip()
         errs += US.check_table_name(v["name"], revit_on, excel_on)
         if revit_on:
-            for ctrl, key, label, lo, hi in ((self.tb_text_mm, "text_mm", u"Text height", 1.0, 10.0),
-                                             (self.tb_page_h, "page_h", u"Max table height", 50.0, 5000.0)):
-                try:
-                    v[key] = US.parse_decimal(ctrl.Text)
-                    if not (lo <= v[key] <= hi):
-                        errs.append(u"%s must be between %g and %g mm." % (label, lo, hi))
-                except ValueError:
-                    errs.append(u"%s is not a number." % label)
+            try:
+                v["page_h"] = US.parse_decimal(self.tb_page_h.Text)
+                if not (50.0 <= v["page_h"] <= 5000.0):
+                    errs.append(u"Max table height must be between 50 and 5000 mm.")
+            except ValueError:
+                errs.append(u"Max table height is not a number.")
             v["prefix"] = self.tb_prefix.Text.strip()
             if not v["prefix"]:
                 errs.append(u"Enter a sheet number prefix.")
@@ -689,7 +824,7 @@ class AbacoWindow(WPFWindow):
         ok = []
         if v["revit"]:
             try:
-                text_mm, page_h = v["text_mm"], v["page_h"]
+                text_mm, page_h = self.text_and_page()[0], v["page_h"]
                 warn = self.size_warning(build_layout(res.revit, text_mm, page_h))
                 if warn:
                     self.log(u"Warning: %s" % warn)
@@ -712,6 +847,13 @@ class AbacoWindow(WPFWindow):
 
     def close_click(self, sender, args):
         self.Close()
+
+    def sync_lists(self):
+        """Fields, Sort & group and Filter all draw on the Fields tab: refresh the lists that offer them."""
+        if self.rs is None or self.state is None:
+            return
+        self.bind_levels()
+        self.filter_tab.set_catalogue(self.rs, self.state.table_keys())
 
 
 if __name__ == "__main__":

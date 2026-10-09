@@ -20,18 +20,22 @@ from abaco.records import (
     K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID, K_COUNT,
     K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA, K_IS_CURTAIN)
 
+from abaco import appearance as AP
+
 try:
     _STR = (basestring,)
 except NameError:
     _STR = (str,)
+
+_NUM = (int, float)
 try:
-    _NUM = (int, long, float)
-except NameError:
-    _NUM = (int, float)
+    _NUM = _NUM + (type(2 ** 64),)      # long on Python 2 / IronPython 2.7, int on Python 3
+except Exception:
+    pass
 
 CALC_MODES = ("none", "total", "min", "max", "minmax")
 DEFAULT_LABELS = {"varies": u"Varies", "total": u"Total", "min": u"Min", "max": u"Max",
-                  "grand": u"Grand total", "no_layers": u"(no layers)"}
+                  "grand": u"Grand total", "no_layers": u"(no layers)", "summary": u"Summary"}
 
 # decimals that reproduce v1; other fields fall back on the kind
 _KEY_DECIMALS = {K_LAYER_THICKNESS: 4, K_WIDTH: 3, K_HEIGHT: 3, K_LENGTH: 2, K_AREA: 2, K_LAYER_AREA: 2}
@@ -40,6 +44,14 @@ _KIND_DECIMALS = {"length": 3, "area": 2, "volume": 3, "number": 3}
 ROW_DATA, ROW_TOTAL, ROW_MIN, ROW_MAX = "data", "total", "min", "max"
 ROW_GTOTAL, ROW_GMIN, ROW_GMAX = "gtotal", "gmin", "gmax"
 CALC_ROW_KINDS = (ROW_TOTAL, ROW_MIN, ROW_MAX, ROW_GTOTAL, ROW_GMIN, ROW_GMAX)
+ROW_BLANK, ROW_HEADER = "blank", "header"
+
+ROW_SUMHEAD = "sumhead"             # "Summary" header row at the bottom of the table
+
+
+_KIND_EL = {ROW_DATA: "data", ROW_HEADER: "header", ROW_SUMHEAD: "summaryHeader",
+            ROW_TOTAL: "summary", ROW_MIN: "summary", ROW_MAX: "summary",
+            ROW_GTOTAL: "summary", ROW_GMIN: "summary", ROW_GMAX: "summary"}
 
 
 # ------------------------------------------------------------------------------------------- settings
@@ -64,9 +76,9 @@ def effective_type(rs, settings):
     return "schedule"
 
 
-def sort_setting(key, direction="asc"):
-    return {"key": key, "dir": direction}
-
+def sort_setting(key, direction="asc", header=False, footer=False, gap=False, footer_calc="field"):
+    return {"key": key, "dir": direction, "header": bool(header), "footer": bool(footer),
+            "gap": bool(gap), "footerCalc": footer_calc}
 
 def default_settings(rs, table_type="schedule", title=u""):
     ttype = effective_type(rs, {"tableType": table_type})
@@ -95,15 +107,15 @@ def default_settings(rs, table_type="schedule", title=u""):
         if k == K_AREA and ttype == "takeoff" and walls:
             extra["heading"] = u"Wall Area (m\u00b2)"      # v1 heading
         fields.append(field_setting(k, hiddenInRevit=(k in hidden), **extra))
+    levels = ([sort_setting(k, gap=True, footer=(i == len(group) - 1)) for i, k in enumerate(group)]
+              + [sort_setting(k) for k in sort])
     return {"category": rs.category_id, "tableType": ttype, "title": title, "fields": fields,
-            "group": [sort_setting(k) for k in group], "sort": [sort_setting(k) for k in sort],
-            "groupTotals": True, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS)}
+            "levels": levels, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS), "appearance": AP.preset("bw")}
 
 
 def required_keys(settings):
     keys = [f["key"] for f in settings.get("fields", [])]
-    keys += [s["key"] for s in settings.get("group", [])]
-    keys += [s["key"] for s in settings.get("sort", [])]
+    keys += [s["key"] for s in settings.get("levels", []) if s.get("key")]
     return keys
 
 def _norm_heading(v):
@@ -144,65 +156,75 @@ class ColumnSpec(object):
 
 
 class Row(object):
-    def __init__(self, kind, cells, gid=0, lorder=0, els=None, label=None):
+    def __init__(self, kind, cells, gid=0, lorder=0, els=None, label=None, members=None):
         self.kind = kind
         self.cells = cells          # field key -> value (None = empty)
         self.gid = gid              # group (or element, when itemized) sequence number
         self.lorder = lorder        # layer order, the last implicit sort key
         self.els = els or []        # ElementRecords behind this row (data rows)
-        self.label = label          # text for total/min/max rows
+        self.label = label          # text for total/min/max rows, and the value of a header row
+        self.members = members or []  # data rows that a footer adds up
 
 
 class Table(object):
-    def __init__(self, title, columns, blocks):
+    def __init__(self, title, columns, blocks, appearance=None):
         self.title = title
         self.columns = columns
-        self.blocks = blocks        # list of lists of Row
+        self.blocks = blocks                       # list of lists of Row
+        self.appearance = appearance or AP.preset("bw")
 
     def select(self, keep):
-        """Same rows, only the columns for which keep(column) is true (hidden / Excel split)."""
-        return Table(self.title, [c for c in self.columns if keep(c)], self.blocks)
+        return Table(self.title, [c for c in self.columns if keep(c)], self.blocks, self.appearance)
 
     def n_data_rows(self):
         return sum(1 for b in self.blocks for r in b if r.kind == ROW_DATA)
 
-    def _label_index(self):
-        """Column that carries the 'Total' / 'Min' / 'Max' label: the first one without a calculation."""
-        calc_keys = set(c.key for c in self.columns if c.calc != "none")
-        for i, c in enumerate(self.columns):
-            if c.key not in calc_keys:
-                return i
-        return None
+    def headings(self):
+        mode = AP.case_of(self.appearance, "heading")
+        return [AP.apply_case(c.heading, mode) for c in self.columns]
 
-    def _line(self, r, label_idx):
-        line = [(u"" if r.cells.get(c.key) is None else r.cells.get(c.key)) for c in self.columns]
-        if r.kind in CALC_ROW_KINDS and label_idx is not None:
-            line[label_idx] = r.label or u""
+    def _line(self, r):
+        n = len(self.columns)
+        app = self.appearance
+        if r.kind in (ROW_HEADER, ROW_SUMHEAD):   # full-row text, always in the first cell
+            line = [u""] * n
+            line[0] = AP.apply_case(r.label or u"", AP.case_of(app, _KIND_EL[r.kind]))
+            return line
+        mode = AP.case_of(app, _KIND_EL.get(r.kind, "data"))
+        line = []
+        for c in self.columns:
+            v = r.cells.get(c.key)
+            if v is None:
+                v = u""
+            elif AP.is_text(v):
+                v = AP.apply_case(v, mode)
+            line.append(v)
+        if r.kind in CALC_ROW_KINDS:              # label goes in the first column without a value
+            label = AP.apply_case(r.label or u"", mode)
+            for i, c in enumerate(self.columns):
+                if r.cells.get(c.key) is None:
+                    line[i] = label
+                    break
+            else:
+                line[0] = label
         return line
 
     def rendered_blocks(self):
-        """Blocks of (row kind, [cell per column]) with the total labels already in place.
-        Used by the Revit layout (and so by the preview). None -> u''."""
-        li = self._label_index()
-        return [[(r.kind, self._line(r, li)) for r in block] for block in self.blocks]
+        return [[(r.kind, self._line(r)) for r in block] for block in self.blocks]
 
     def to_matrix(self):
-        """v1 layout: title row, heading row, blocks separated by one blank row. None -> u''."""
-        n = len(self.columns)
-        li = self._label_index()
-        m = [[self.title] + [u""] * (n - 1), [c.heading for c in self.columns]]
-        for bi, block in enumerate(self.blocks):
-            if bi:
-                m.append([u""] * n)
-            for r in block:
-                m.append(self._line(r, li))
+        m = [[self.title] + [u""] * (len(self.columns) - 1), self.headings()]
+        for block in self.rendered_blocks():
+            for _, line in block:
+                m.append(line)
         return m
 
-
+    
 class Result(object):
     def __init__(self, table, warnings):
         self.table = table                                              # every selected column
         self.warnings = warnings
+        self.appearance = table.appearance
         self.excel = table.select(lambda c: bool(c.show_in_excel))       # stage 7
         self.revit = table.select(lambda c: not c.hidden_in_revit)
 
@@ -248,6 +270,26 @@ def _merge(vals, varies):
 def _sum(vals):
     nums = [v for v in vals if _is_num(v)]
     return sum(nums) if nums else None
+
+def _fmt(v, dec):
+    return (u"%.*f" % (dec, v)) if dec is not None else format(v, ".15g")
+
+
+def _row_calc_value(els, key, mode, dec):
+    """The one value a merged cell shows when its column has a calculation."""
+    nums = [v for v in (e.get(key) for e in els) if _is_num(v)]
+    if not nums:
+        return None
+    if mode == "total":
+        return sum(nums)
+    if mode == "min":
+        return min(nums)
+    if mode == "max":
+        return max(nums)
+    lo, hi = min(nums), max(nums)                  # minmax
+    if abs(hi - lo) < 1e-9:
+        return lo
+    return u"%s \u2013 %s" % (_fmt(lo, dec), _fmt(hi, dec))
 
 
 # --------------------------------------------------------------------------------------------- stage 1
@@ -358,23 +400,27 @@ def _layer_cell(key, lay, ges, labels):
 
 
 # --------------------------------------------------------------------------------------------- stage 3
-def apply_varies(rs, rows, keys, itemize, labels):
-    """Element-scope values left open by stage 2: one value per row, or 'Varies' when the elements differ."""
+def apply_varies(rs, rows, keys, itemize, labels, cols):
+    """Element-scope values left open by stage 2. A column with a calculation shows the calculated value
+    of its elements; otherwise one value per row, or 'Varies' when the elements differ."""
+    calc = dict((c.key, c.calc) for c in cols)
+    dec = dict((c.key, c.decimals) for c in cols)
+    todo = [k for k in keys if rs.field(k) is not None and rs.field(k).scope == "element"]
     cache = {}
-    todo = []
-    for k in keys:
-        f = rs.field(k)
-        if f is not None and f.scope == "element":
-            todo.append(k)
     for r in rows:
         for k in todo:
-            if k in r.cells:
-                continue
-            ck = (r.gid, k)
-            if ck not in cache:
-                vals = [(e.element_id if k == K_ELEMENT_ID else e.get(k)) for e in r.els]
-                cache[ck] = vals[0] if itemize else _merge(vals, labels["varies"])
-            r.cells[k] = cache[ck]
+            mode = calc.get(k, "none")
+            if mode != "none":
+                ck = (r.gid, k, mode)
+                if ck not in cache:
+                    cache[ck] = _row_calc_value(r.els, k, mode, dec.get(k))
+                r.cells[k] = cache[ck]
+            elif k not in r.cells:
+                ck = (r.gid, k)
+                if ck not in cache:
+                    vals = [(e.element_id if k == K_ELEMENT_ID else e.get(k)) for e in r.els]
+                    cache[ck] = vals[0] if itemize else _merge(vals, labels["varies"])
+                r.cells[k] = cache[ck]
     return rows
 
 
@@ -388,44 +434,103 @@ def _gap_sig(r, key):
     return sort_value(v)
 
 
-def sort_and_block(rows, group, sort, itemize, expanded):
-    """Order: group levels, then sort levels, then (fixed) group id and layer order.
-    A new block starts whenever a group value changes."""
-    rows = list(rows)
-    rows.sort(key=lambda r: (r.gid, r.lorder))
-    for s in reversed(list(group) + list(sort)):
-        k = s["key"]
-        rows.sort(key=lambda r, k=k: sort_value(r.cells.get(k)), reverse=(s.get("dir") == "desc"))
-    gap_keys = [s["key"] for s in group]
-    blocks, cur, prev = [], [], None
+def _lv(r, lv):
+    if lv.get("_gid"):
+        return r.gid
+    return _gap_sig(r, lv["key"])
+
+
+def _segments(rows, lv):
+    """Consecutive runs of rows with the same value of one level (rows are already sorted)."""
+    segs, prev = [], None
     for r in rows:
-        sig = [_gap_sig(r, k) for k in gap_keys]
-        if itemize and expanded:
-            sig.append(r.gid)                     # one block per element, repeating its layers
-        if prev is not None and sig != prev and cur:
-            blocks.append(cur)
-            cur = []
-        cur.append(r)
-        prev = sig
-    if cur:
-        blocks.append(cur)
-    return blocks
+        v = _lv(r, lv)
+        if not segs or v != prev:
+            segs.append([])
+            prev = v
+        segs[-1].append(r)
+    return segs
+
+
+def _sort_rows(rows, levels):
+    rows = sorted(rows, key=lambda r: (r.gid, r.lorder))     # fixed: element order, then layer order
+    for s in reversed(levels):                                 # last level first: stable sorts stack up
+        if s.get("key") is None:
+            continue
+        k = s["key"]
+        rows = sorted(rows, key=lambda r, k=k: sort_value(r.cells.get(k)), reverse=(s.get("dir") == "desc"))
+    return rows
+
+
+def _header_text(r, lv):
+    v = r.cells.get(lv["key"])
+    return u"(none)" if v is None or v == u"" else u"%s" % v
+
+
+def _footer(seg, cols, labels, mode):
+    out = _calc_rows(seg, cols, False, labels, override=mode)
+    for x in out:
+        x.members = seg
+    return out
+
+
+def _seg_items(seg, levels, i, cols, labels):
+    """Rows of one segment of level i, in Revit order: header, children, footer, gap."""
+    lv = levels[i]
+    out = []
+    if lv.get("header"):
+        out.append(Row(ROW_HEADER, {}, label=_header_text(seg[0], lv)))
+    if i + 1 < len(levels):
+        for sub in _segments(seg, levels[i + 1]):
+            out.extend(_seg_items(sub, levels, i + 1, cols, labels))
+    else:
+        out.extend(seg)
+    if lv.get("footer"):
+        out.extend(_footer(seg, cols, labels, lv.get("footerCalc") or "field"))
+    if lv.get("gap"):
+        out.append(Row(ROW_BLANK, {}))
+    return out
+
 
 
 # --------------------------------------------------------------------------------------------- stage 5
-def _calc_rows(data_rows, cols, grand, labels):
+def _values_for(rows, c):
+    """The values a footer adds up, each element and each group counted once."""
+    scope = c.field.scope if c.field is not None else None
+    if scope == "element":
+        seen, out = set(), []
+        for r in rows:
+            for e in r.els:
+                if e.element_id not in seen:
+                    seen.add(e.element_id)
+                    out.append(e.get(c.key))
+        return out
+    if scope == "layer":
+        return [r.cells.get(c.key) for r in rows]
+    seen, out = set(), []
+    for r in rows:
+        if r.gid not in seen:
+            seen.add(r.gid)
+            out.append(r.cells.get(c.key))
+    return out
+
+
+def _calc_rows(rows, cols, grand, labels, override=None):
+    """Total / min / max rows for `rows`. override: footer mode of one level (None or 'field' = each
+    field's own Calculation)."""
     sums, mins, maxs = {}, {}, {}
     for c in cols:
-        if c.calc == "none":
+        mode = c.calc if override in (None, "field") else override
+        if mode == "none":
             continue
-        nums = [r.cells.get(c.key) for r in data_rows if _is_num(r.cells.get(c.key))]
+        nums = [v for v in _values_for(rows, c) if _is_num(v)]
         if not nums:
             continue
-        if c.calc == "total":
+        if mode == "total":
             sums[c.key] = sum(nums)
-        if c.calc in ("min", "minmax"):
+        if mode in ("min", "minmax"):
             mins[c.key] = min(nums)
-        if c.calc in ("max", "minmax"):
+        if mode in ("max", "minmax"):
             maxs[c.key] = max(nums)
     out = []
     spec = ((sums, ROW_GTOTAL if grand else ROW_TOTAL, "total"),
@@ -435,27 +540,33 @@ def _calc_rows(data_rows, cols, grand, labels):
         if not cells:
             continue
         if grand:
-            label = labels["grand"] if name == "total" else u"%s %s" % (labels["grand"], labels[name].lower())
+            label = labels[name]
         else:
             label = labels[name]
         out.append(Row(kind, cells, label=label))
     return out
 
 
-def add_calculations(blocks, cols, grand_totals, labels, group_totals=True):
-    if not any(c.calc != "none" for c in cols):
-        return blocks
-    out = []
-    for b in blocks:
-        extra = _calc_rows([r for r in b if r.kind == ROW_DATA], cols, False, labels) if group_totals else []
-        out.append(b + extra)
-    if grand_totals:
-        all_data = [r for b in blocks for r in b if r.kind == ROW_DATA]
-        g = _calc_rows(all_data, cols, True, labels)
+def build_blocks(rows, levels, cols, labels, itemize, expanded, grand):
+    levels = list(levels)
+    if itemize and expanded:           # one block per element, its layers repeated
+        levels.insert(0, {"key": None, "_gid": True, "header": False, "footer": False, "gap": False})
+    rows = _sort_rows(rows, levels)
+    if levels:
+        blocks = [_seg_items(seg, levels, 0, cols, labels) for seg in _segments(rows, levels[0])]
+    else:
+        blocks = [list(rows)] if rows else []
+    if blocks and blocks[-1] and blocks[-1][-1].kind == ROW_BLANK:    # no gap after the last block
+        blocks[-1] = blocks[-1][:-1]
+    if grand and any(c.calc != "none" for c in cols):
+        g = _calc_rows(rows, cols, True, labels)
+        for x in g:
+            x.members = rows
         if g:
-            out.append(g)
-    return out
-
+            if blocks:
+                blocks[-1].append(Row(ROW_BLANK, {}))      # blank line between the data and the summary
+            blocks.append([Row(ROW_SUMHEAD, {}, label=labels["summary"])] + g)
+    return blocks
 
 # --------------------------------------------------------------------------------------------- stage 6
 def format_cells(blocks, cols):
@@ -470,12 +581,14 @@ def format_cells(blocks, cols):
 
 
 # ------------------------------------------------------------------------------------------ the pipeline
-def _levels(rs, items, ttype, what, warns):
+def _levels(rs, items, ttype, what, warns, allowed):
     out = []
     for s in items:
         f = rs.field(s["key"])
         if f is None:
             warns.append(u"%s field '%s' not found in this project: skipped." % (what, s["key"]))
+        elif s["key"] not in allowed:
+            warns.append(u"%s field '%s' is not in the Fields tab: skipped." % (what, f.label))
         elif f.scope == "layer" and ttype != "takeoff":
             warns.append(u"%s field '%s' needs a Material takeoff: skipped." % (what, f.label))
         else:
@@ -488,28 +601,24 @@ def build_table(rs, settings):
     labels.update(settings.get("labels") or {})
     itemize = bool(settings.get("itemize"))
     ttype = effective_type(rs, settings)
+    appearance = AP.normalize(settings.get("appearance"))
 
     cols, warns = select_columns(rs, settings, ttype)
     if settings.get("tableType") == "takeoff" and ttype != "takeoff":
         warns.insert(0, u"Material takeoff needs layered types: showing a schedule instead.")
-    group = _levels(rs, settings.get("group", []), ttype, u"Group", warns)
-    sort = _levels(rs, settings.get("sort", []), ttype, u"Sort", warns)
+    allowed = set(c.key for c in cols)                    # Sort & group only use fields of the Fields tab
+    levels = _levels(rs, settings.get("levels") or [], ttype, u"Level", warns, allowed)
 
     keys = [c.key for c in cols]
-    for s in group + sort:                                 # hidden / unused fields still group and sort
-        if s["key"] not in keys:
-            keys.append(s["key"])
-    split = [s["key"] for s in group if rs.field(s["key"]).scope == "element"]
+    split = [s["key"] for s in levels if rs.field(s["key"]).scope == "element"]
 
     rows, expanded = build_rows(rs, settings, keys, ttype, labels, split)
-    rows = apply_varies(rs, rows, keys, itemize, labels)
-    blocks = sort_and_block(rows, group, sort, itemize, expanded)
-    blocks = add_calculations(blocks, cols, bool(settings.get("grandTotals")), labels,
-                              settings.get("groupTotals", True))
+    rows = apply_varies(rs, rows, keys, itemize, labels, cols)
+    blocks = build_blocks(rows, levels, cols, labels, itemize, expanded, bool(settings.get("grandTotals")))
     blocks = format_cells(blocks, cols)
 
     if itemize and expanded and len(rows) > 500:
         warns.append(u"Itemized layered table: %d rows." % len(rows))
     title = settings.get("title")
     title = title if (title and _s(title).strip()) else (u"Abaco " + rs.category_name).strip()
-    return Result(Table(title, cols, blocks), warns)
+    return Result(Table(title, cols, blocks, appearance), warns)
