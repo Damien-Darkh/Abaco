@@ -4,6 +4,8 @@
   WPF drawing      fill_grid(), draw_canvas()                         WPF imports happen inside the functions
 The Revit preview is drawn from the SAME layout.build_layout output as the real drafting views.
 """
+from abaco import measure as M
+
 PX_PER_MM = 3.6
 _PT_PER_MM = 2.835
 PAGE_GAP_PX = 36.0
@@ -76,103 +78,135 @@ def _excel_cell(v, numfmt):
     return u"%s" % v
 
 
-def _cell_style(grid, align, wrap, bold, italic, underline, fg, bg, cache):
-    """One WPF style per distinct combination of cell properties (cached)."""
-    key = (align, bool(wrap), bool(bold), bool(italic), bool(underline), fg, bg)
-    if key in cache:
-        return cache[key]
-    import clr
-    from System.Windows import Style, Setter, TextAlignment, HorizontalAlignment, TextWrapping
-    from System.Windows import FontWeights, FontStyles, TextDecorations
-    from System.Windows.Controls import TextBlock, Control, Border
-    from System.Windows.Media import SolidColorBrush
-    ta = {"left": TextAlignment.Left, "center": TextAlignment.Center, "right": TextAlignment.Right}[align]
-    st = Style(clr.GetClrType(TextBlock))
-    st.BasedOn = grid.FindResource("CellText")
-    st.Setters.Add(Setter(TextBlock.TextAlignmentProperty, ta))
-    st.Setters.Add(Setter(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Stretch))
-    st.Setters.Add(Setter(TextBlock.FontWeightProperty, FontWeights.Bold if bold else FontWeights.Normal))
-    st.Setters.Add(Setter(TextBlock.FontStyleProperty, FontStyles.Italic if italic else FontStyles.Normal))
-    if underline:
-        st.Setters.Add(Setter(TextBlock.TextDecorationsProperty, TextDecorations.Underline))
-    if wrap:
-        st.Setters.Add(Setter(TextBlock.TextWrappingProperty, TextWrapping.Wrap))
-    if fg:
-        st.Setters.Add(Setter(TextBlock.ForegroundProperty, _brush_obj(fg)))
-    cache[key] = st
-    return st
+def _w(on):
+    return 1.0 if on else 0.0
 
 
-def _brush_obj(hexcolor):
-    from System.Windows.Media import SolidColorBrush, Color
-    h = hexcolor.lstrip("#")
-    return SolidColorBrush(Color.FromRgb(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+def _auto_mm(sheet, ci):
+    """Width of an auto column: the widest text in it, measured with each row's font."""
+    app = sheet.appearance
+    em = app["font"]["sizeMm"]
+    fam = app["font"]["family"]
+    best = 0.0
+    for r in range(2, sheet.nrows + 1):
+        el = sheet.row_el[r - 1]
+        if el is None or r in sheet.merged_rows:
+            continue
+        if r == 2 and sheet.vertical[ci]:
+            continue                              # a vertical heading does not widen the column
+        e = app["elements"][el]
+        text = _excel_cell(sheet.values[r - 1][ci], sheet.numfmts[ci])
+        best = max(best, M.width_mm(text, fam, em, e["bold"], e["italic"]) * 1.06)
+    return max(best + 2 * 0.8 * em, 12.0)
 
 
-def fill_grid(grid, sheet):
-    """As-Excel preview of the sheet model, with the appearance styles per cell and per row.
+def fill_grid(host, sheet):
+    """Build the As Excel preview. If building fails, the reason is shown in the grid instead of
+    leaving it empty."""
+    from System.Windows import Thickness, TextWrapping
+    from System.Windows.Controls import TextBlock
+    try:
+        _build_grid(host, sheet)
+    except Exception as ex:
+        host.Children.Clear()
+        host.RowDefinitions.Clear()
+        host.ColumnDefinitions.Clear()
+        msg = TextBlock()
+        msg.Text = u"As Excel preview could not be drawn: %s" % ex
+        msg.TextWrapping = TextWrapping.Wrap
+        msg.Margin = Thickness(8)
+        msg.Foreground = _brush("#8A4B08")
+        host.Children.Add(msg)
 
-    Underline and text colour are set per cell (WPF has no per-row underline). Row backgrounds are set
-    per row (a DataGridRow background), so zebra striping and background colours appear.
-    Returns one style dict per data row, in the same order as the grid rows.
-    """
-    from System.Collections.Generic import List
-    from System.Windows.Controls import DataGridTextColumn, DataGridLength
-    from System.Windows.Data import Binding
-    from System.Windows.Media import FontFamily
+
+def _build_grid(host, sheet):
+    """As-Excel preview: a Grid of styled cells built from the sheet model. Each cell carries its own
+    font, bold, italic, underline, colours, background, wrapping, alignment and lines, so every appearance
+    setting shows the same way it is written to Excel. Merged rows span the whole table."""
+    from System.Windows import GridLength, Thickness, TextWrapping, FontWeights, FontStyles, TextDecorations
+    from System.Windows import TextAlignment, HorizontalAlignment, VerticalAlignment
+    from System.Windows.Controls import Grid, Border, TextBlock, ColumnDefinition, RowDefinition
+    from System.Windows.Media import FontFamily, RotateTransform
 
     app = sheet.appearance
-    wrap = bool(app["wrap"])
+    n = sheet.ncols
+    fam = app["font"]["family"]
+    px = app["font"]["sizeMm"] * _PT_PER_MM * 4.0 / 3.0       # pt -> WPF pixels
+    lc = app["lines"]
     zebra = app["zebra"]
-    grid.ItemsSource = None
-    grid.FontFamily = FontFamily(app["font"]["family"])
-    grid.FontSize = app["font"]["sizeMm"] * _PT_PER_MM * 4.0 / 3.0       # pt -> WPF units
-    grid.Columns.Clear()
+    wrap = bool(app["wrap"])
+    ta = {"left": TextAlignment.Left, "center": TextAlignment.Center, "right": TextAlignment.Right}
 
-    # per data row: the element's properties and the row background
-    styles, row_style = [], []
-    data_index = 0
-    for r in range(3, sheet.nrows + 1):
+    host.Children.Clear()
+    host.RowDefinitions.Clear()
+    host.ColumnDefinitions.Clear()
+    for ci in range(n):
+        cd = ColumnDefinition()
+        mm = sheet.widths[ci] or _auto_mm(sheet, ci)
+        cd.Width = GridLength(mm * PX_PER_MM)
+        host.ColumnDefinitions.Add(cd)
+
+    for r in range(1, sheet.nrows + 1):
         el = sheet.row_el[r - 1]
+        rd = RowDefinition()
         if el is None:
-            styles.append({"blank": True})
-            row_style.append(None)
+            rd.Height = GridLength(app["blankMm"] * PX_PER_MM)
+        else:
+            rd.Height = GridLength.Auto
+        host.RowDefinitions.Add(rd)
+        if el is None:
             continue
+
         e = app["elements"][el]
         bg = e["background"]
-        if not bg and zebra["on"] and el == "data" and data_index % 2 == 1:
+        if not bg and zebra["on"] and r in sheet.zebra_rows:
             bg = zebra["color"]
-        if el == "data":
-            data_index += 1
-        st = {"blank": False, "bold": e["bold"], "italic": e["italic"], "underline": e["underline"],
-              "fg": e["color"], "bg": bg}
-        styles.append(st)
-        row_style.append(st)
+        spans = r in sheet.merged_rows
 
-    cache = {}
-    for i in range(sheet.ncols):
-        col = DataGridTextColumn()
-        col.Header = sheet.values[1][i]
-        col.Binding = Binding("[%d]" % i)
-        align = sheet.aligns[i] if sheet.aligns[i] in ("left", "center", "right") else "left"
-        # the column style is the cell style of the data rows; per-row bold/italic/underline/colour
-        # are applied to each cell in the row's own style below
-        col.ElementStyle = _cell_style(grid, align, wrap, False, False, False, None, None, cache)
-        col.Width = DataGridLength(sheet.widths[i] * PX_PER_MM) if sheet.widths[i] else DataGridLength.Auto
-        grid.Columns.Add(col)
+        for ci in ([0] if spans else range(n)):
+            if spans:
+                text = sheet.values[r - 1][0]
+                align = "center" if el == "title" else e.get("align", "left")
+            else:
+                text = _excel_cell(sheet.values[r - 1][ci], sheet.numfmts[ci])
+                align = sheet.aligns[ci] if el == "data" else e.get("align", "left")
 
-    items = List[object]()
-    for r in range(3, sheet.nrows + 1):
-        item = List[object]()
-        for i, v in enumerate(sheet.values[r - 1]):
-            item.Add(_excel_cell(v, sheet.numfmts[i]))
-        items.Add(item)
-    grid.ItemsSource = items
+            tb = TextBlock()
+            tb.Text = u"%s" % text
+            tb.FontFamily = FontFamily(fam)
+            tb.FontSize = px
+            tb.FontWeight = FontWeights.Bold if e["bold"] else FontWeights.Normal
+            tb.FontStyle = FontStyles.Italic if e["italic"] else FontStyles.Normal
+            if e["underline"]:
+                tb.TextDecorations = TextDecorations.Underline
+            tb.Foreground = _brush(e["color"])
+            tb.TextAlignment = ta.get(align, TextAlignment.Left)
+            tb.TextWrapping = TextWrapping.Wrap if wrap else TextWrapping.NoWrap
+            tb.HorizontalAlignment = HorizontalAlignment.Stretch
+            tb.VerticalAlignment = VerticalAlignment.Center
+            tb.Margin = Thickness(3, 1, 3, 1)
+            if el == "heading" and sheet.vertical[ci] and not spans:
+                tb.LayoutTransform = RotateTransform(-90)
+                tb.TextWrapping = TextWrapping.NoWrap
 
-    # per-row styling: rows are created by the grid, so the style is applied on LoadingRow
-    grid.Tag = (row_style,)
-    return styles
+            border = Border()
+            if bg:
+                border.Background = _brush(bg)
+            if e["lines"]:
+                last = spans or ci == n - 1
+                border.BorderBrush = _brush(lc["color"])
+                border.BorderThickness = Thickness(
+                    _w(lc["outer"] if ci == 0 else lc["inner"]),
+                    _w(lc["outer"] if r == 1 else lc["inner"]),
+                    _w(lc["outer"] if last else lc["inner"]),
+                    _w(lc["outer"] if r == sheet.nrows else lc["inner"]))
+            border.Child = tb
 
+            Grid.SetRow(border, r - 1)
+            Grid.SetColumn(border, ci)
+            if spans:
+                Grid.SetColumnSpan(border, n)
+            host.Children.Add(border)
 
 def _brush(hexcolor):
     from System.Windows.Media import SolidColorBrush, Color

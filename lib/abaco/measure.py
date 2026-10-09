@@ -30,20 +30,21 @@ def _init():
 
 def _font(family, em_mm, bold, italic):
     g, Font, FontStyle, GraphicsUnit, _fmt = _gdi
-    if bold and italic:
-        style = FontStyle.BoldItalic
-    elif bold:
-        style = FontStyle.Bold
-    elif italic:
-        style = FontStyle.Italic
-    else:
-        style = FontStyle.Regular
-    key = (family, round(em_mm, 3), style)
+    style = FontStyle.Regular
+    if bold:
+        style = style | FontStyle.Bold
+    if italic:
+        style = style | FontStyle.Italic
+    key = (family, round(em_mm, 3), int(style))
     if key not in _fonts:
-        try:
-            _fonts[key] = Font(family, em_mm, style, GraphicsUnit.Millimeter)
-        except Exception:
-            _fonts[key] = Font(u"Arial", em_mm, style, GraphicsUnit.Millimeter)
+        for fam, st in ((family, style), (family, FontStyle.Regular), (u"Arial", FontStyle.Regular)):
+            try:
+                _fonts[key] = Font(fam, em_mm, st, GraphicsUnit.Millimeter)
+                break
+            except Exception:
+                continue
+        else:
+            raise Exception(u"No usable font for %s" % family)
     return _fonts[key]
 
 

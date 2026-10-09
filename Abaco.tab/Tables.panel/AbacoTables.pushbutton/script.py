@@ -29,6 +29,7 @@ from abaco.records import K_IS_CURTAIN
 from abaco import appearance as AP
 from abaco import color_picker
 from abaco.sheet import build_sheet
+from abaco import ui_theme
 
 doc = revit.doc
 
@@ -59,7 +60,9 @@ class AbacoWindow(WPFWindow):
     _loading_app = False
 
     def __init__(self):
-        WPFWindow.__init__(self, script.get_bundle_file("ui.xaml"))
+        dark = ui_theme.revit_is_dark()
+        WPFWindow.__init__(self, ui_theme.themed_xaml(script.get_bundle_file("ui.xaml"), dark))
+        self.log(u"Window theme: %s (follows Revit)" % (u"dark" if dark else u"light"))
         self.cats = rr.list_model_categories(doc)
         self.rs = None
         self.state = None
@@ -260,6 +263,7 @@ class AbacoWindow(WPFWindow):
         note = u""
         if res.warnings:
             note = u"   |   " + u"; ".join(res.warnings[:2])
+
         if self.view_revit.IsChecked:
             text_mm, page_h = self.text_and_page()
             lay = build_layout(res.revit, text_mm, page_h)
@@ -274,7 +278,7 @@ class AbacoWindow(WPFWindow):
                 (u"   |   " + warn) if warn else u"", note)
         else:
             sheet = build_sheet(res.excel)
-            self._row_styles = PV.fill_grid(self.preview_grid, sheet)
+            PV.fill_grid(self.excel_grid, sheet)
             self.show_title(sheet)
             self.preview_status.Text = u"%d rows, %d columns%s" % (
                 res.excel.n_data_rows(), len(res.excel.columns), note)
@@ -282,9 +286,9 @@ class AbacoWindow(WPFWindow):
     def show_no_match(self):
         self.preview_status.Text = u"No elements match the filter. Change or clear the conditions in the Filter tab."
         try:
-            self.preview_grid.ItemsSource = None
-            self.preview_grid.Columns.Clear()
-            self._row_styles = []
+            self.excel_grid.Children.Clear()
+            self.excel_grid.RowDefinitions.Clear()
+            self.excel_grid.ColumnDefinitions.Clear()
             self.preview_title.Text = u""
             self.revit_canvas.Children.Clear()
             self.width_ruler.Children.Clear()
@@ -309,20 +313,6 @@ class AbacoWindow(WPFWindow):
             out.append(u"a page is %.0f mm tall, the sheet only %.0f mm" % (tall, h))
         return u"TOO BIG: " + u"; ".join(out) if out else u""
 
-    def preview_loading_row(self, sender, args):
-        try:
-            st = self._row_styles[args.Row.GetIndex()]
-        except Exception:
-            return
-        row = args.Row
-        if st["blank"]:
-            row.Height = 8.0
-            return
-        row.Height = Double.NaN
-        row.FontWeight = FontWeights.Bold if st["bold"] else FontWeights.Normal
-        row.FontStyle = FontStyles.Italic if st["italic"] else FontStyles.Normal
-        row.Foreground = US.brush(st["fg"])
-        row.Background = US.brush(st["bg"])
 
     def view_changed(self, sender, args):
         if not self._ready:

@@ -17,6 +17,7 @@ _ALIGN = {"left": DB.HorizontalTextAlignment.Left,
           "center": DB.HorizontalTextAlignment.Center,
           "right": DB.HorizontalTextAlignment.Right}
 ELEMENTS = ("title", "heading", "header", "summaryHeader", "summary", "data")
+NOTES = []
 
 
 def _unique(base, existing):
@@ -42,6 +43,9 @@ def _text_type(doc, app, element):
     t.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size * MM)
     t.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(1 if e["bold"] else 0)
     t.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_ITALIC).Set(1 if e["italic"] else 0)
+    got = t.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_ITALIC).AsInteger()
+    if got != (1 if e["italic"] else 0):
+        NOTES.append(u"Text type '%s': italic flag not stored (read back %s)." % (name, got))
     t.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_UNDERLINE).Set(1 if e["underline"] else 0)
     t.get_Parameter(DB.BuiltInParameter.TEXT_BACKGROUND).Set(1)       # transparent
     t.get_Parameter(DB.BuiltInParameter.TEXT_BOX_VISIBILITY).Set(0)
@@ -197,6 +201,7 @@ def build_tables(doc, layout, sheet_name, number_prefix, title_block=None):
     report = []
     app = layout.appearance
     types = dict((el, _text_type(doc, app, el)) for el in ELEMENTS)
+    del NOTES[:]
     thin = _thin_style(doc)
     caches = {"lines": {}, "fill": {}}
 
@@ -258,4 +263,6 @@ def build_tables(doc, layout, sheet_name, number_prefix, title_block=None):
         if n > total:
             _clear_view(doc, view)
             report.append(u"EMPTY: view '%s' is no longer needed. Remove it from its sheet if you like." % view.Name)
+    
+    report.extend(NOTES)
     return report
