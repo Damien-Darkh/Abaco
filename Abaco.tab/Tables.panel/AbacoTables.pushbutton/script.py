@@ -73,7 +73,6 @@ class AbacoWindow(WPFWindow):
         self._init_controls()
         # one container-level handler per list (XamlReader cannot wire handlers inside DataTemplates)
         self.fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
-        self.suggest_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.suggest_row_click))
         self.level_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.level_row_click))
         self.elem_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.elem_row_click))
         self.filter_tab = FilterTab(self.filter_list, self.filter_status, self.filter_all, self.filter_any,
@@ -221,6 +220,7 @@ class AbacoWindow(WPFWindow):
 
     def bind_suggest(self):
         self.suggest_list.ItemsSource = self.state.suggestions(self.tb_param_search.Text)
+        self.update_suggest_buttons()
 
     def bind_options(self):
         self._loading = True
@@ -417,16 +417,39 @@ class AbacoWindow(WPFWindow):
         except Exception as ex:
             self.fail(ex)
 
-    def suggest_row_click(self, sender, args):
-        btn = args.OriginalSource
-        row = getattr(btn, "DataContext", None)
-        if getattr(btn, "Tag", None) != "add" or row is None or self.state is None:
+    # ------------------------------------------------------------------ Add parameter icon column
+    def _is_custom(self, row):
+        """TODO Phase 7: return True when the row is a custom field (SuggestRow gets an is_custom flag)."""
+        return False
+
+    def update_suggest_buttons(self):
+        row = self.suggest_list.SelectedItem
+        self.btn_param_add.IsEnabled = row is not None
+        self.btn_param_custom.IsEnabled = True
+        self.btn_param_edit.IsEnabled = row is not None and self._is_custom(row)
+        self.btn_param_delete.IsEnabled = row is not None and self._is_custom(row)
+
+    def suggest_selection_changed(self, sender, args):
+        if self._ready:
+            self.update_suggest_buttons()
+
+    def suggest_add_click(self, sender, args):
+        row = self.suggest_list.SelectedItem
+        if row is None or self.state is None:
             return
         if self.state.add_field(row.key):
             self.bind_fields()
             self.bind_format()
-            self.sync_lists()
             self.refresh_preview()
+
+    def suggest_custom_click(self, sender, args):
+        self.log(u"TODO (Phase 7): the custom field editor is not built yet.")
+
+    def suggest_edit_click(self, sender, args):
+        self.log(u"TODO (Phase 7): editing custom fields is not built yet.")
+
+    def suggest_delete_click(self, sender, args):
+        self.log(u"TODO (Phase 7): deleting custom fields is not built yet.")
 
     def param_search_changed(self, sender, args):
         if self._ready and self.state is not None:
