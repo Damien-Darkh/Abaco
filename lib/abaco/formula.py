@@ -123,6 +123,19 @@ def ty_of_field(kind):
     return Ty(u"text")          # text and elementid
 
 
+def field_kind(ty):
+    """Field kind and unit label for a checked result type (custom fields in the catalogue).
+    A unit exponent outside 1 to 3 has no kind of its own: it is a number with the unit shown as text."""
+    if ty.kind == u"text":
+        return u"text", None
+    if ty.kind == u"bool":
+        return u"yesno", None
+    if ty.exp == 0:
+        return (u"integer" if ty.count else u"number"), None
+    known = {1: (u"length", u"m"), 2: (u"area", u"m\u00b2"), 3: (u"volume", u"m\u00b3")}
+    return known.get(ty.exp) or (u"number", unit_text(ty))
+
+
 # ---------------------------------------------------------------------------------------- tokenizer
 def _describe(t):
     if t.kind == u"end":
@@ -474,6 +487,9 @@ class _Checker(object):
             fix = (u"did you mean {%s}?" % guess) if guess else u"check the field name; it must be a field of this table"
             return self.err(n.pos, R_REF, u"unknown field {%s}" % n.key, fix)
         self.refs.add(f.key)
+        res = getattr(f, "result", None)           # a custom field carries the type of its own formula
+        if res:
+            return Ty(res[0], res[1], res[2])
         return ty_of_field(f.kind)
 
     def _unitize(self, n):

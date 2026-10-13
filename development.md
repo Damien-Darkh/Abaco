@@ -1,424 +1,408 @@
 # Abaco Tables: Development Plan
 
-Port of the Dynamo graph `Abaco_Murature_Sync.dyn` to a pyRevit extension with a WPF (XAML) window, extended with
-Revit-style **Fields**, **Sorting / Grouping** and **Formatting** controls.
+Last updated: 13 October 2026
 
-- **Target:** Revit 2024, 2025, 2026, 2027 (pyRevit 6.4 or newer on every machine)
-- **UI reference:** https://claude.ai/artifact/CMbnrBCQTZ2BVij1syXvvH (approved mockup, Preview tab)
-- **Status:** v1 (Dynamo port) is written but **not yet run in Revit**. Everything below builds on it.
+- **Target:** Revit 2024, 2025, 2026 and 2027, with pyRevit 6.5 or newer on every machine.
+- **Status:** the extension runs in Revit 2025 test sessions. It reads the model, builds the table, writes the Excel tab, and creates drafting views and sheets. The Settings, Fields, Filter, Sort & group, Formatting and Appearance tabs are built. Custom fields are designed but not built.
+- **UI reference:** the approved mockup, since changed in several places. The Preview tab as built is the reference.
 
 ---
 
 ## 0. Overview
 
-### 0.1 Where we are
+### 0.1 Folder layout
 
 ```
 Abaco.extension/
   lib/abaco/
-    table_builder.py   model -> finished table (fixed columns, fixed sort)      [v1, untested in Revit]
-    layout.py          rows -> lines/text + pages (pure Python, smoke-tested)   [v1]
-    drafting.py        draws drafting views + sheets                            [v1, untested in Revit]
-    excel_writer.py    Excel COM writer                                         [v1, untested in Revit]
+    records.py          model data, neutral (no Revit)
+    revit_reader.py     the only module that reads the Revit API
+    pipeline.py         settings -> table (no Revit)
+    layout.py           table -> drawing geometry, paged (no Revit)
+    measure.py          text measurement for the layout (System.Drawing)
+    drafting.py         draws views and sheets (Revit)
+    sheet.py            table -> Excel sheet model (no Excel)
+    excel_writer.py     Excel COM writer
+    runner.py           glue: records + settings -> results, drawing, Excel
+    preview.py          As Excel grid and As Revit canvas
+    appearance.py       presets, styles, case, alignment (no Revit)
+    ui_state.py         window state and row items (no WPF on CPython)
+    filters.py          filter conditions (no Revit)
+    filter_ui.py        Filter tab controller
+    color_picker.py     PixiEditor colour picker, with hex fallback
+    ui_theme.py         light and dark copy of ui.xaml, following Revit 2025
+    ColorPicker.dll, ColorPicker.Models.dll
+    formula.py          formula tokenizer, parser, unit and type checker (no Revit)
+    evaluate.py         formula evaluator, per row (no Revit)
+    icons/              SVG source files (reference only; icons are inline in ui.xaml)
   Abaco.tab/Tables.panel/AbacoTables.pushbutton/
-    script.py          window code
-    ui.xaml            window (Settings + Preview tabs)
+    script.py           window code
+    ui.xaml             window
+  Abaco.tab/Tables.panel/AbacoTest.pushbutton/
+  Abaco.tab/Tables.panel/Phase3Check.pushbutton/   temporary, delete after Phase 13
+  tests/                records, pipeline, outputs, ui, filters, measure, formula, evaluate; formula and evaluate done, others to update (Phase 13)
 ```
 
-### 0.2 Where we are going
+`table_builder.py` is retired. Delete it once Phase 0 passes.
 
-The table builder stops returning a finished table. It returns **flat records**, and a **pipeline** turns records into
-two outputs (one for Excel, one for Revit) according to user settings. The window edits those settings and shows a
-live preview without rescanning the model.
+### 0.2 Guiding rules
 
-```
-Revit model
-   |  (read once)
-   v
-[Phase 1] Records  ----------------------------------------------+
-   |                                                             |
-   v                                                             |
-[Phase 2] Pipeline: fields -> itemize/group -> Varies -> sort -> calculations -> formatting
-   |                          |
-   v                          v
- Excel table             Revit table  (hidden fields removed, widths, alignment)
-   |                          |
-   v                          v
-[Phase 3] excel_writer     drafting (+ layout)
-   ^                          ^
-   +------ [Phase 4] XAML window: tabs + live preview (same pipeline output) ------+
-                              |
-                    [Phase 5] settings saved per category
-```
-
-### 0.3 Guiding rules
-
-1. **One source of truth.** The preview, the Revit drawing and the Excel file all read the same pipeline output. What
-   you see is what is written.
-2. **Pure Python wherever possible.** Pipeline and layout have no Revit dependency, so they can be unit-tested outside
-   Revit with mock data.
-3. **Read the model once.** Changing a setting re-runs the pipeline in memory. Only "Re-read model" rescans.
-4. **Common-subset Python.** Code must run on IronPython 2.7 (pyRevit default engine), IronPython 3.4 and CPython 3.
-   No f-strings, `unicode` handled via `u""` literals, no `print` statements, no `basestring` without a fallback.
-5. **Revit-version-safe API use.** Only APIs available in 2024 to 2027 (for example `ElementId.Value`, ForgeTypeId units).
-   Never `IntegerValue`, `UnitType`, `ParameterType`.
+1. **One source of truth.** The preview, the Revit drawing and the Excel file all read the same pipeline output. What you see is what is written.
+2. **Pure Python wherever possible.** Pipeline, layout, formula and evaluator have no Revit dependency, so they are tested outside Revit.
+3. **Read the model deliberately.** Changing a setting recomputes in memory. The model is read again only by Re-read model, or when the category or table type changes. The one exception is the formula dry run, which loads only the fields a formula refers to (see Phase 5).
+4. **Common-subset Python.** Code must run on IronPython 2.7 (pyRevit default engine) and CPython 3. No f-strings. Use `u""` literals.
+5. **Revit-version-safe API use.** `ElementId.Value`, `ForgeTypeId` units, `SpecTypeId`. Never `IntegerValue`, `UnitType`, `ParameterType`.
+6. **Honest limits.** Anything Revit cannot draw is said so in the UI and in this plan, and Excel carries it instead.
 
 ---
 
-## Phase 0: Baseline: make v1 run on all four Revit versions
+## 1. Phase summary
 
-**Goal:** a verified starting point before anything is stacked on it.
+| Phase | Name | Status | Depends on |
+|---|---|---|---|
+| 0 | Baseline: runs on every target Revit version | In progress | none |
+| 1 | Data layer: flat records | Done | 0 |
+| 2 | Pipeline: settings to table | Done | 1 |
+| 3 | Output layers: Revit drawing and Excel writer | Done (known Revit limits) | 2 |
+| 4 | Window: Settings, Preview, Appearance, theme | Done, with icon column pending | 2, 3 |
+| 5 | Formula language and evaluator | Done for version 1 (Revit test pending) | 2 |
+| 6 | Custom fields in the table: catalogue, pipeline, calculated fields | Planned | 4, 5 |
+| 7 | Custom field editor and icon column | Planned | 4, 6 |
+| 8 | Custom model parameters (Revit) | Planned | 7 |
+| 9 | Saved settings, per category | Planned | 4, 6, 7, 8 |
+| 10 | Notes and comments sync with Excel | Planned | 8, 9 |
+| 11 | Arrays and `len()` in formulas | Planned | 5, 6 |
+| 12 | Row index field | Planned | 2, 11 |
+| 13 | Testing and release | Planned | all |
 
-**Why first:** v1 has never run in Revit. Building new features on unverified code multiplies debugging.
-
-### Work
-
-| # | Task | Detail |
-|---|------|--------|
-| 0.1 | Environment check | Every machine on pyRevit 6.4+. On Revit 2027, pyRevit must be attached as **CurrentUser** (all-users manifests are rejected for unsigned add-ins). |
-| 0.2 | Add `bundle.yaml` | Move button title and tooltip out of inline `__title__` / `__doc__` into `bundle.yaml`, because pyRevit is progressively removing inline metadata parsing. |
-| 0.3 | Smoke test on **Revit 2024** | Load, open window, category list populates, Preview works, Run creates view + sheet, Excel writes. |
-| 0.4 | Smoke test on **Revit 2027** | Same checklist. If 2024 and 2027 pass, 2025 and 2026 are expected to pass. |
-| 0.5 | Fix findings | Collect error text from the window log and pyRevit output; patch v1. |
-
-### Known risks to watch in this phase
-
-- **Excel COM late binding** across the runtime changes (Revit 2025 and again 2027). Untested everywhere.
-- `Activator.CreateInstance.Overloads[Type]` on IronPython 3.4 / CPython.
-- XAML event binding (`Click="..."`) under each engine.
-- `DataGridTextColumn` + `Binding("[0]")` on `List[object]` rows.
-
-### Decision gate
-
-If Excel COM fails on a newer version, add a **fallback writer** that creates the `.xlsx` directly (zip + XML, no Excel
-needed). Cost: preserving other tabs in an existing workbook is harder. Decide after the test result.
-
-### Done when
-
-- Both 2024 and 2027 complete the checklist (see section 6) with no unhandled errors.
-- `bundle.yaml` in place.
+Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the editor can be tested before any model parameter is written.
 
 ---
 
-## Phase 1: Data layer: flat records
+## 2. Phase details
 
-**Goal:** read the model once into a neutral structure that holds *every* value the pipeline might need.
+### Phase 0: Baseline
 
-**Replaces:** the grouping + row-building logic inside `table_builder.build_table`.
+**Goal:** the same behaviour on every supported Revit version.
 
-### 1.1 Record model
+**Done**
+- The extension loads, reads the model, builds tables, writes Excel, and creates drafting views and sheets in Revit 2025.
+- `bundle.yaml` is in place for the buttons.
+- The inspection of `ColorPicker.dll` was done, and the picker's type names are known.
 
-Three levels of data per record, matching how the table is built today:
+**To do**
+- Smoke test on Revit 2024 and Revit 2027, using the checklist in Phase 13.
+- Confirm Excel COM works on each version. Decision gate: if Excel COM fails on a newer version, the direct `.xlsx` writer moves from v2 into the plan.
+- Attach pyRevit as CurrentUser for Revit 2027 (all-users manifests are rejected for unsigned add-ins).
+- Delete `table_builder.py`.
 
-| Level | Examples | Notes |
-|-------|----------|-------|
-| **Element** | Element Id, Comments, Mark, instance parameters, Level / Base Constraint | One per Revit element. Needed for *Itemize every instance* and *Varies*. |
-| **Type** | Type Mark, Type Name, Family, Fire Rating, Assembly Code, Keynote, Manufacturer, shared type parameters | One per element type. |
-| **Layer** | Order, Material, Thickness, Function, Material Area | Only for compound-structure types (walls, floors, roofs, ceilings). |
+**Done when:** Revit 2024 and 2027 pass the checklist with no unhandled errors.
 
-Each element record stores: its type key, its element values, and (for layered types) its per-material areas.
-Type values and layer lists are stored once per type, not repeated per element.
+### Phase 1: Data layer
 
-### 1.2 Field catalogue
+**Goal:** read the model once into records that hold every value the pipeline may need.
 
-A *field* is anything that can become a column. Each field has:
+**Done**
+- `records.py`: element, type and layer data; field catalogue with scope and kind; display labels that keep twin parameters apart.
+- `revit_reader.py`: reads core values, scans the catalogue, loads values on demand and caches them.
+- `test_records.py`: 9 tests pass.
 
-| Property | Meaning |
-|----------|---------|
-| `key` | Stable identifier. Built-in parameters use the `BuiltInParameter` name; shared parameters use the GUID; project parameters use the parameter `ElementId`. **Never the display name** (display names are localised: an Italian Revit shows different names). |
-| `label` | Default heading (localised display name). |
-| `scope` | `element`, `type` or `layer`. |
-| `kind` | `text`, `number`, `integer`, `yesno`, `length`, `area`, `elementid`. |
-| `unit` | For length/area: target unit (metres, square metres). |
+**Notes**
+- Field keys are stable identifiers (BuiltInParameter name, GUID, or `id:<n>`). Display names are never keys, so an Italian Revit works.
+- Values are loaded when a field is first used, to keep large models fast.
 
-The catalogue is built by scanning parameters on the selected category's elements and types (the "214 available" count
-in the mockup). Built-in fields from v1 (Type Mark, Wall Type Name, Order, Material, Thickness, Function, Material Area,
-Base Constraint, Count, Length, Height, Width, Family) are always present.
+### Phase 2: Pipeline
 
-### 1.3 Unit and value conversion
+**Goal:** turn records and settings into the table.
 
-- Lengths and areas are converted with `UnitUtils.ConvertFromInternalUnits` and `UnitTypeId` (ForgeTypeId API only).
-- Numbers keep full precision in the record. **Rounding is a formatting concern (Phase 2), not a data concern.**
-- `YesNo` becomes `Yes` / `No`; `ElementId` parameters resolve to the element's name; missing values are `None`.
-- Existing v1 conversions (feet to metres, sq ft to sq m) are kept so results match the Dynamo graph.
+**Done**
+- Stages: field selection, rows (grouped or itemized, layers expanded), Varies or calculated value per cell, sort and blocks, footers and summary, number formatting, output split.
+- One list of levels. Each level has Header, Footer (with its own calculation: per field, totals, min, max, min and max) and Gap row.
+- Summary block at the bottom: a bold "Summary" header, then Total, Min and Max rows. Its Excel formulas stay live.
+- A cell in a column with a calculation shows the calculated value of its elements. Otherwise it shows the value, or "Varies".
+- Sort and group only use fields checked in the Fields tab.
+- Footers add up each element once, even for layered walls.
 
-### 1.4 Table shapes
+**To do**
+- Update `test_pipeline.py` to the level list and `SUBTOTAL` (both still use the old keys).
 
-The three v1 shapes remain as **templates** that define the default field set and default sort:
+### Phase 3: Output layers
 
-| Template | Applies to | Default fields |
-|----------|-----------|----------------|
-| Layered | Types with compound structure | Type Mark, Wall Type Name, Order, Material, Thickness, Function, Material Area, Base Constraint |
-| Curtain wall | Walls where `Kind == Curtain` | Type Mark, Wall Type Name, Count, Total Length, Height, Area, Base Constraint |
-| Simple | Doors, windows, other families | Type Mark, Family, Type Name, Width, Height, Count, Level |
+**Goal:** the Revit drawing and the Excel file show the same table.
 
-### 1.5 Edge cases to handle explicitly
+**Done**
+- `measure.py`: measures text with the real font, and breaks lines after spaces and hyphens the way Revit does.
+- `layout.py`: auto widths fit the text. Wrapped cells get the height their lines need. Alignment and heading orientation come from the Appearance tab for headings and summary rows, and from each field for data rows. Lines, backgrounds and zebra striping are computed per row. Revit receives the line breaks itself, so it never wraps on its own.
+- `drafting.py`: one Revit text type per appearance element (font, size, bold, italic, underline). Thin lines use the `<Thin Lines>` style. Backgrounds and zebra are filled regions. Line colour uses a line style per colour.
+- `sheet.py` and `excel_writer.py`: number formats, live `SUBTOTAL` formulas where safe, merges for full-row text, row heights from the line count, freeze panes, gridlines, borders, and a readback of the applied fonts in the log.
 
-- Stacked walls (no compound structure): one row, material shown as `(no layers)`.
-- Layers with no material: `None / Air`.
-- Elements without a level: empty level, still grouped.
-- Same parameter name existing as both type and instance parameter: distinct `key`, shown with a scope tag.
-- Linked-model elements: excluded (as in v1).
+**Known limits**
+- **Revit text colour:** Revit draws text colour from the view's Text Notes category, so it can only be set for a whole view. Per-cell text colour is not possible. Revit keeps text black. Excel and the preview show the colour.
+- **Revit underline and italic** work through text types. Check the type names in Manage > Text Types.
 
-### 1.6 Deliverables
+### Phase 4: Window
 
-- `lib/abaco/records.py`: record classes (pure Python, no Revit imports).
-- `lib/abaco/revit_reader.py`: reads Revit into records and builds the field catalogue (the only module touching the API).
-- `table_builder.py` retired (its logic moves into reader + pipeline).
+**Goal:** the window, with every setting in one place and a preview that matches the output.
 
-### Done when
+**Done**
+- **Settings:** category, table type, table name and title, Revit options (sheet prefix, title block, page height), Excel workbook.
+- **Preview left column:** Fields, Filter, Sort & group, Formatting, Appearance.
+- **Preview right column:** As Excel (a grid of styled cells, so every appearance setting shows) and As Revit (a canvas drawn from the same layout).
+- **Filter:** conditions with and/or, exact-value combo box with suggestions from the model, numeric and text operators. No quick links.
+- **Formatting:** heading, alignment for data, column width, calculation, hidden in Revit, shown in Excel.
+- **Appearance:** themes (Black & white, Office, Accent, Custom), font family from the machine, font size in mm, bold, italic, underline, case (none, UPPER, lower, Title, Sentence), per-element text and background colour, lines, zebra, wrap text, blank row height, Excel freeze and gridlines.
+- **Theme:** dark window when Revit's UI is dark (Revit 2025 and later). Light otherwise.
+- **Colour picker:** PixiEditor ColorPicker is wired in, with the hex prompt as a fallback. It needs `ColorPicker.dll` and `ColorPicker.Models.dll` in `lib/abaco/`.
 
-- Reader returns records for walls, curtain walls, floors, doors in a test project.
-- Record counts and areas match the v1 output for the same project.
-- Field catalogue lists built-in and shared parameters with correct kinds.
+**To do**
+- Verify the colour picker opens and returns a colour in Revit 2025 (the fallback is what runs until then).
+- Icon column in Add parameter (Add, Custom field, Edit, Delete), with the SVG icons inline in `ui.xaml`. The custom field icon waits for the sigma SVG to be placed.
+- Two-column Add parameter area, with the list as a `ListBox` so it has a selection.
+- Remove the Max auto width remnants if any remain.
 
----
+**Done when:** every tab behaves as described, and Run output matches the As Excel and As Revit previews.
 
-## Phase 2: Pipeline (pure Python, unit-tested here)
+### Phase 5: Formula language and evaluator
 
-**Goal:** turn records plus settings into the final table(s). This is where the Fields, Sorting and Formatting tabs
-get their behaviour.
+**Goal:** a formula can be written, checked and evaluated, with no Revit and no UI.
 
-### 2.1 Settings model
+**Status:** done for version 1. The full specification is `phase5.md`. `test_formula.py` (29 tests) and `test_evaluate.py` (24 tests) pass with `python3`. Not yet run under IronPython 2.7: that happens in the Revit test (Phase 13).
 
-One serialisable structure (also what Phase 5 saves):
+**Version 1 scope**
+- **Grammar:** one expression. No chains, no blocks, no arrays. Chains `IF(c): v; ELIF (c): v; ELSE: v;` and blocks are version 2.
+- **Fields:** written `{Label}` in the editor, stored as `{key}`. `[ ]` is kept for arrays (Phase 11).
+- **Operators:** comparison `= != < > <= >=` (no chaining); logic `AND`, `OR` (booleans only, short-circuit); arithmetic `+ - * / %` and `^` (right-associative, whole-number literal exponent when the value has a unit); unary minus; grouping `( )`. `+` also joins two texts. `|x|` is dropped: use `ABS(x)`.
+- **Functions:** `IF(c, a, b)` (lazy, both branches one type and unit), `MIN`, `MAX`, `SQRT`, `ROOT(x, n)`, `ABS`, `INT` (rounds half away from zero; a text gives its length), `FLOAT`, `STRING` (a literal keeps its typed text, other numbers use the shortest plain form), `SENSITIVE` (case-sensitive text comparison, on one side of `=` or `!=`). `LEN` is reserved and says "not available until version 2". `ROUND(x, n)` comes in version 2 or 3.
+- **Keywords:** case-insensitive, shown in capitals everywhere. Reserved: `AND OR IF ELIF ELSE TRUE FALSE SENSITIVE MIN MAX SQRT ROOT ABS INT FLOAT STRING LEN`.
+- **Units:** the exponent of `m` is tracked (`m` 1, `m²` 2, `m³` 3). `*` and `/` add and subtract exponents. `+`, `-`, `%` and comparisons need equal exponents; a literal `0` fits any unit. Suffixes `m`, `m²`, `m³` follow a number or a count (`{Count} m` is a length). A count plus a plain number stays a count. `MIN` and `MAX` with different units are refused at save time.
+- **Booleans:** `TRUE` and `FALSE` in any letter case. Yes/No fields are booleans in formulas. A boolean result shows as `#TRUE` or `#FALSE`.
+- **Empty and errors:** an empty value is `NONE`, shown `#NONE`. Arithmetic, functions and comparisons with NONE give NONE. `FALSE AND x` is FALSE and `TRUE OR x` is TRUE whatever `x` is. An error wins over NONE. Division or remainder by zero and an even root of a negative are `#ERROR` (reasons `div0`, `sqrt_neg`). Other run-time reasons: `ref` (row has no such field), `type` (a row value of the wrong type), `range` (result not a finite number).
+- **Numbers:** `=` and `!=` use a tolerance of 1e-6, as filters do. Formulas run on full-precision values, not the rounded display values. `%` follows Python.
+- **Save-time checks, which refuse the save:** syntax with position; unknown field with the nearest match; circular reference with the full loop; unit mismatch; type mismatch; `AND` or `OR` on a non-boolean; literal division or remainder by zero; `SQRT` or even `ROOT` of a negative literal; a key containing `}`. Each error carries a position, a reason code (`syntax`, `unit`, `type`, `ref`, `div0`, `sqrt_neg`) and a suggested fix.
+- **Save-time dry run, which saves with a warning:** the formula is evaluated for every row. Failures are counted per reason, with up to three examples. Failing rows show `#ERROR`.
+- **Dry-run loading:** the dry run loads only the fields the formula refers to, the first time they are needed, and caches them until Re-read model.
 
-```json
-{
-  "category": "OST_Walls",
-  "mode": "standard",
-  "title": "Abaco Muratura",
-  "fields": [
-    { "key": "ALL_MODEL_TYPE_MARK", "include": true, "heading": "Type Mark",
-      "align": "center", "orientation": "horizontal", "widthMm": null,
-      "hiddenInRevit": false, "showInExcel": true, "calc": "none" }
-  ],
-  "sort": [ { "key": "WALL_BASE_CONSTRAINT", "dir": "asc", "gap": true } ],
-  "itemize": false,
-  "grandTotals": false,
-  "revit": { "textMm": 2.5, "pageHeightMm": 490, "prefix": "AM" }
-}
-```
+**Deliverables (done):** `formula.py`, `evaluate.py`, `test_formula.py`, `test_evaluate.py`, all runnable with `python3`.
 
-### 2.2 Pipeline stages
+**Still to verify in Revit (Phase 13):** both files under IronPython 2.7; `repr()` of a float gives the shortest round-trip text there, which `STRING` relies on.
 
-Executed in this order. Each stage is a pure function, tested on its own.
+**Done when (met for version 1):** the suites cover precedence, nesting, every save-time check, every run-time `#ERROR` case, and the dry run on sample rows.
 
-| Stage | Input | Output | Behaviour |
-|-------|-------|--------|-----------|
-| 1. Field selection | records, settings.fields | ordered column list | Included fields only, in the Fields-tab order. |
-| 2. Row building | records | rows | **Grouped** (default): one row per type + level (+ size, as in v1). **Itemized**: one row per element, with an Element Id column added. Layered types expand each row into layer rows. |
-| 3. Varies | grouped rows | rows with merged values | For each *element-scope* column in a group: if all elements agree, show the value; otherwise the cell is `Varies`. Type and layer values never vary within a group. Not applied when itemized. |
-| 4. Sort + block | rows, settings.sort | ordered rows | Multi-level sort, asc/desc, **case-insensitive text, numeric order for numbers**. Layer **Order is always the last implicit key** so build-ups stay in sequence. Levels with *Gap row* ticked start a new block when their value changes. |
-| 5. Calculations | blocks | blocks + total rows | Per field: none, total (sum), minimum, maximum, min and max. Applied **per block**; **Grand totals** adds a final row. `Varies` and empty cells are skipped. |
-| 6. Formatting | blocks | typed cells | Number rounding / decimals, alignment, heading text and orientation. |
-| 7. Output split | formatted table | `excel_table`, `revit_table` | Excel keeps columns with *Show in Excel*; Revit drops columns with *Hidden field (Revit)*. Hidden fields still take part in sorting and calculations. |
+### Phase 6: Custom fields in the table
 
-### 2.3 Rules decided with the user
+**Goal:** calculated fields work in the table like any other field.
 
-- **Varies** is shown as the word `Varies` (italic pill in the preview). *Itemize every instance* is the Revit-style alternative.
-- **Hidden field (Revit)** and **Show in Excel** are independent. A column can be in Revit only, Excel only, both, or neither (still usable for sorting).
-- **Calculation options:** none, calculate totals, minimum, maximum, minimum and maximum.
-- **Formatting options per field:** heading, heading orientation (horizontal / vertical), alignment (left / center / right), column width in mm (auto or fixed, Revit only), hidden field, show in Excel, calculation.
+**Status (13 October 2026):** catalogue, storage and the pipeline stage are done: `pipeline.attach_custom()` and `apply_formulas()`, scope `formula`, `tests/test_custom.py` (21 tests). Still to do: filters on calculated fields, decimals from project settings, and the UI hooks (call `attach_custom` when a category is read, keep `custom` across Reset, show custom fields in Add parameter).
 
-### 2.4 Open decisions (defaults assumed unless changed)
+**Scope**
+- Custom fields enter the catalogue with type and scope, and are marked as custom. The result type comes from the checked formula.
+- **Evaluation is per row, after grouping.** A formula sees the row's cell values: a group's `Count`, the summed `Area` and `Total Length`, shared values. So `{Area} / {Count}` is the average area per element and `{Area} * 2` doubles the group's summed area. `evaluate.calculate_row()` runs the fields in `topological_order()`; a circular reference is refused with the loop shown.
+- **Live behaviour:** calculated fields are recomputed every time the table is rebuilt: filter, group, sort, formatting or field changes. A row carries every field its formulas use, including fields hidden in Revit or not included in the table. Nothing recomputes when the window is closed.
+- **Sort, group, footers, summary:** the calculated value is a row value, so it can be sorted on and can start a new block when it changes. It cannot split a row (it exists only after the rows are built). Footers and the summary skip `#NONE`, `#ERROR`, `#TRUE` and `#FALSE`, as they skip `Varies`. The pipeline shows `evaluate.to_cell()` and formats numbers with the column decimals.
+- **Filter:** conditions on model fields run on elements before grouping, as in Phase 4. Conditions on calculated fields run after grouping, on row values (to confirm, see Open decisions 4).
+- **Removal:** a field removed from the table with × returns to Add parameter. Formulas that use it show `#ERROR` (reason `ref`), and the removal warning lists them.
+- **Names:** custom field names are checked against existing labels when created or edited.
 
-| Question | Default |
-|----------|---------|
-| Itemize on layered types (walls) | One block per element, repeating its layers. May produce many rows; a warning shows the row count before Run. |
-| Totals in layered tables | Sum per block of the chosen column (for example total wall thickness). Material Area is not summed by default (it repeats per layer). |
-| Itemize column | Adds `Element Id` as first column. |
-| Number formatting | Decimals set per field; defaults reproduce v1 (thickness 3 decimals, area 2). |
-
-### 2.5 Testing
-
-- `tests/` folder with plain Python tests (run with `python3`, no Revit).
-- Fixtures: mock records for layered walls, curtain walls, doors.
-- Cases: each stage alone; default settings reproduce the v1 table exactly; sorting stability; Varies with mixed values;
-  totals with empty cells; hidden / excel-only combinations; pagination boundaries.
-
-### Done when
-
-- Default settings on the fixtures reproduce the v1 output row-for-row.
-- All stage tests pass on CPython 3 and, where available, IronPython.
-
----
-
-## Phase 3: Output layers
-
-**Goal:** make the Revit drawing and the Excel writer understand everything the pipeline now produces.
-
-### 3.1 Layout engine (`layout.py`)
-
-Changes from v1:
+**Done when:** a calculated field works through filter, group, sort, footer, summary and Excel, and a removal shows the warning and `#ERROR`.
 
-| Change | Detail |
-|--------|--------|
-| **Explicit header row** | Receives the header row position from the pipeline instead of searching for the text "Type Mark". Type Mark becomes an ordinary field. |
-| **Per-column width** | Auto width stays (`longest text x char width + padding`, minimum 12 mm) unless a fixed width is set. |
-| **Alignment** | Per column: left (x = cell left + pad), center, right. Text notes get an explicit width = column width minus padding so Revit aligns the text inside it. |
-| **Total rows** | Drawn with a bold text type and a line above. |
-| **Vertical headings** | Header row height increases to fit the longest rotated heading. |
-| **Pagination** | Unchanged rule: whole blocks never split across pages; title and header repeat. Total rows stay with their block. |
-
-### 3.2 Drafting (`drafting.py`)
-
-- Text notes: set `HorizontalAlignment`; apply `TextNoteOptions.Rotation` (90 degrees) for vertical headings.
-- Bold text type reused for headings, titles and total rows.
-- Update-in-place behaviour from v1 stays: existing `<name> table <n>` views are cleared and redrawn, their sheet
-  placement is kept; extra pages are created and reported; surplus pages are emptied and reported.
-- Transaction handled by the caller; failure rolls back everything.
-
-### 3.3 Excel writer (`excel_writer.py`)
-
-| Change | Detail |
-|--------|--------|
-| Alignment | `HorizontalAlignment` per column (left -4131, center -4108, right -4152). |
-| Orientation | `Orientation = 90` for vertical headings. |
-| Number formats | `NumberFormat` per column from the decimals setting (for example `0.000`). |
-| Total rows | Written as **real `SUM` / `MIN` / `MAX` formulas** over the block range so the workbook stays live; bold. |
-| Varies | Written as text; excluded from formulas automatically (text is ignored by `SUM`). |
-| Show in Excel | Handled upstream by the pipeline; writer receives only the columns to write. |
-| Cleanup | Keeps v1 behaviour: wipe the tab, write, format, save, close, quit; releases the COM object. |
-
-### 3.4 Preview rendering (supports Phase 4)
-
-The **Revit preview is drawn from the same layout output** (lines + text per page) onto a WPF `Canvas`, scaled
-(3.6 px per mm in the mockup). No second drawing logic, so the preview cannot drift from the real result.
-
-### Done when
-
-- A table with mixed alignments, a fixed-width column, a vertical heading and totals draws correctly in Revit.
-- Excel shows matching alignment and live formulas in total rows.
-- Re-running updates the existing views and leaves sheets in place.
-
----
-
-## Phase 4: XAML window
-
-**Goal:** the approved mockup as a real window.
-
-### 4.1 Window structure
-
-```
-Window "Abaco Tables"
-  Header
-  TabControl (outer)
-    Settings   category, wall type, title, table name, Revit output, Excel output   (as v1)
-    Preview
-      Left card, TabControl (inner):
-        Fields             include checkbox, reorder, parameter search + suggestions, reset
-        Sorting / Grouping sort levels (column, A-Z / Z-A, gap row), implicit Order row,
-                           Grand totals, Itemize every instance
-        Formatting         field list (badges: alignment, hidden, no-Excel, sigma) +
-                           form for the selected field
-      Right area:
-        toolbar            [As Excel | As Revit]  live status  [Re-read model]
-        As Excel           DataGrid (typed cells, Varies pills, total rows)
-        As Revit           scaled paper Canvas, hidden-columns chip, width ruler in mm
-  Log box
-  Buttons                  Preview table | Run | Close
-```
-
-### 4.2 Behaviour
-
-| Interaction | Result |
-|-------------|--------|
-| Any change on Fields / Sorting / Formatting | Pipeline re-runs on in-memory records; the active preview refreshes immediately. |
-| Re-read model | Re-runs the reader (Phase 1) and refreshes. |
-| As Excel / As Revit toggle | Switches the preview between `excel_table` and `revit_table`. |
-| Category or wall-type change | Loads the saved settings for that selection (Phase 5), or the template defaults. |
-| Run | Writes Revit and/or Excel from the same pipeline output; each output reports success or failure separately, as in v1. |
-| Add parameter | Search over the field catalogue; adds the field at the end of the list. |
-| Reorder | Up / down buttons first; drag and drop is an optional later improvement. |
-
-### 4.3 Implementation notes
-
-- Window code splits: `script.py` (entry), `ui_state.py` (settings <-> controls), `preview.py` (DataGrid and Canvas rendering).
-- Controls are wired by `x:Name`; handlers by method name (pyRevit `WPFWindow`).
-- Initial XAML events fire while loading, so handlers stay guarded by a ready flag (as in v1).
-- Long operations pump the dispatcher so the log repaints. Moving the model read to a background thread is not done
-  (Revit API calls must stay on the main thread).
-- Validation before Run: view-name and Excel-tab character rules, 31-character tab limit, numeric fields accept a decimal comma.
-
-### Done when
-
-- All three tabs behave as in the mockup, including both preview modes.
-- Changing any setting updates the preview without a model rescan.
-- Run output matches what the preview showed.
-
----
-
-## Phase 5: Saved settings
-
-**Goal:** the field arrangement, sorting and formatting survive between sessions.
-
-| Item | Decision |
-|------|----------|
-| Scope | One saved settings object per **category + wall-type mode** (standard / curtain). |
-| Storage | A JSON file next to the user's pyRevit config (`%APPDATA%\pyRevit\`), not inside the Revit project. |
-| Versioning | `"v": 1` in the file; unknown fields ignored; missing fields filled from template defaults. |
-| Missing parameters | A saved field that no longer exists in the project is kept but flagged "not found" and skipped. |
-| Reset | "Reset" restores template defaults for the current selection. |
-| Not in this phase | Sharing presets across a team (server file, named presets). Planned after the core works. |
-
-### Done when
-
-- Closing and reopening the window restores the last arrangement per category.
+### Phase 7: Custom field editor and icon column
+
+**Goal:** create, edit and delete custom fields from the window.
+
+**Status:** the editor window (XAML) is designed and accepted. The code-behind (save checks, first failing row, editor capitalisation, field and key insertion) is not written.
+
+**Scope**
+- **Icon column** in Add parameter, with four icons (SVG, 16 × 16, colours from the SVG):
+  - **Add:** adds the selected parameter to the table.
+  - **Custom field:** opens the editor.
+  - **Edit:** edits the selected custom field: name and formula. Greyed out for model parameters.
+  - **Delete:** deletes the selected custom field from the table, the parameter list, the catalogue and every saved reference (sort levels, filter conditions, formatting), after a confirmation. Greyed out for model parameters.
+- **Greyed out** means opacity 0.35 on the icon. Colours do not change.
+- **The × in the table list** returns a field to Add parameter. It does not delete it.
+- **Editor, Field card:** name (unique in the table) and kind: **Calculated** or **Notes / comments**. Notes / comments is shown but disabled until Phase 8, because it is a text model parameter. Choosing Notes hides the formula, keys, fields and example cards.
+- **Result unit** is derived from the checked formula and shown read-only. **Decimal places** are always automatic (see Open decisions 5). There is no unit or decimals control.
+- **Formula box:** a single line (no Enter). Keywords and function names are converted to capitals on the keystroke after the word is complete (`True` becomes `TRUE` when the next key is a separator). A word that continues into a longer name (`True_key`) is left alone. Nothing is converted inside `{ }` or `" "`, and units (`m`, `m²`, `m³`) are never converted. `formula.to_caps()` does the transform.
+- **Status and preview:** the status line shows the check result (valid, or the first error with its fix). The "Where it fails" box appears only when the formula or a row has an error, with the first failing row and its reason, from `evaluate.dry_run()`.
+- **Virtual keyboard:** a fixed two-column grid that does not scroll. Left: arithmetic and `%`, brackets, `,`, `=` and `^`, comparisons, then `SQRT` and `ROOT`. Right: `AND OR TRUE FALSE`; units `m m² m³` (always active, the checker explains misuse); `IF MIN MAX ABS`; `INT FLOAT STRING SENSITIVE`. Keys insert capitals. Each button has a tooltip with its use and an example, using full labels and units, for example `{Height (m)} > 3 m`.
+- **Field picker:** lists the table fields only. Double-click or Insert field puts `{Label}` at the cursor as one item. The saved formula stores keys (`formula.to_stored()`), the editor shows labels (`formula.to_editor()`).
+- **Example:** built by code from the table's own fields, with the units the checker needs.
+- **Save:** runs the Phase 5 checks, refuses to save on a save-time error, saves with a warning on row errors, and adds the new field to the table fields.
+
+**Done when:** a calculated field can be created, edited, removed from the table, and deleted, with the confirmation and clean-up described above.
+
+### Phase 8: Custom model parameters (Revit)
+
+**Goal:** create project parameters in the model and fill them from the table.
+
+**Scope**
+- **Kinds:** instance or type. Chosen at creation.
+- **Shared or project:** a shared parameter is used only from the project's existing parameter file. If the project has none, the shared option is greyed out and project parameters are created. No file is ever created.
+- **Categories:** created for every category chosen at creation. The assignment can be edited later.
+- **Values:** filled from a formula or a constant, in a transaction, after a confirmation.
+- **Delete:** removes the parameter from the extension and the model, after a confirmation that states it cannot be undone in Revit.
+- **Name clashes:** checked against existing parameters in the project.
+
+**Test project:** a copy of a real project with shared parameters, custom families and the categories in use.
+
+**Done when:** a parameter created on the copy is readable by Abaco, filled from a formula, and removed cleanly.
+
+### Phase 9: Saved settings, per category
+
+**Goal:** the table arrangement survives between sessions.
+
+**Scope**
+- One saved object per category and mode (standard or curtain).
+- Stored as JSON next to the user's pyRevit config, not in the Revit project.
+- Versioned with `"v": 1`. Unknown fields are ignored. Missing fields take template defaults.
+- Saved: fields, levels, filter, formatting, appearance, the Revit and Excel options, and custom fields with their formulas.
+- A custom model parameter is referenced by its GUID and category list. If it no longer exists in the project, the field is kept and flagged "not found".
+- A formula that refers to a missing field is kept and shows `#ERROR` until the field is restored.
+- Reset restores template defaults for the current selection.
 - A corrupt or old-version file falls back to defaults without an error.
 
----
+**Done when:** closing and reopening restores each category's arrangement, and a corrupt file falls back cleanly.
 
-## Phase 6: Testing and release
+### Phase 10: Notes and comments sync with Excel
 
-### 6.1 Automated (no Revit)
+**Goal:** a notes or comments column in the Excel tab stays in step with the matching model parameter.
 
-- Pipeline and layout unit tests (Phases 2 and 3) run on every change with `python3`.
-- XAML well-formedness check and a cross-check that every `x:Name` and event handler exists in the code.
+**Scope**
+- **Source:** a text custom model parameter from Phase 8, instance kind, one value per element.
+- **Element identity:** the key is the element's IfcGUID, which the reader already loads. Element Id is not stable across models and copies, so it is only a fallback.
+- **Direction (open):** Excel to model, model to Excel, or both. Proposed: both, with an explicit Sync action. No automatic writes.
+- **Conflicts:** if a value changed on both sides since the last sync, both values are shown, and the user chooses. Nothing is overwritten silently.
+- **Last-synced snapshot (open):** stored in the table settings, or on a hidden sheet in the workbook. It is what makes a change detectable.
+- **Writing to the model:** in a transaction, after a confirmation that states how many elements change.
+- **Excel side:** the notes column is found by its heading. Rows are matched by IfcGUID, and rows that no longer exist are reported, not deleted.
 
-### 6.2 Manual checklist (run on Revit 2024 and 2027; spot-check 2025, 2026)
+**Done when:** a round trip (edit in Excel, sync to the model, change in the model, sync back) works on the test project, and a conflict is shown rather than overwritten.
 
-1. Extension loads; ribbon button present.
-2. Window opens; categories list shows only categories with elements.
-3. Walls: standard and curtain modes build; preview matches expectations.
-4. Add a shared parameter; reorder; rename heading; hide in Revit; switch off in Excel.
-5. Sort by level then Type Mark; confirm gap rows; confirm layer order preserved.
-6. Group with differing Comments: cell shows `Varies`. Switch on Itemize: one row per element.
-7. Calculate totals on Thickness; check block totals; tick Grand totals.
-8. As Revit preview matches the drawing created by Run (widths, alignment, hidden columns).
-9. Run twice: views update in place, sheets untouched; shrink the table: surplus view emptied and reported.
-10. Excel: new file, existing file, file open elsewhere (read-only error), tab replaced and other tabs intact, formulas live.
+### Phase 11: Arrays and `len()` in formulas
+
+**Goal:** arrays and `len()` in formulas, after the custom field features are working.
+
+**Scope**
+- **Syntax:** array literals `[a, b, c]`, where each item is an expression, including field references. `len(x)` takes an array or a text.
+- **Type checker:** an array has an element type. `len` returns a number. Items of one array must share a type when the types are known.
+- **Save-time checks:** mixed item types in one array are refused when known. `len` of a number is refused. An empty array literal `[]` is refused, since it has no type.
+- **Run time:** an element whose array items differ in type shows `#ERROR` for that element.
+- **Arithmetic on arrays** (element-by-element) is out of scope unless decided later.
+- **Keyboard:** `[ ]` and `LEN(` are added, with tooltips. `LEN` is already reserved in version 1 and reports "not available until version 2".
+
+**Depends on:** the grammar and checker in Phase 5, and the evaluator in Phase 6.
+
+**Done when:** tests cover array literals, `len` on arrays and text, mixed-type arrays refused at save, and the dry run on sample records.
+
+### Phase 12: Row index field
+
+**Goal:** a built-in field that numbers the table's rows from 1.
+
+**Scope**
+- Added from Add parameter like any other field, and works in Revit and Excel.
+- Numbers the data rows from 1 with no gaps. Header, footer, summary and blank rows get no number.
+- Numbered after sorting and grouping, so the numbers follow the order the table shows.
+- Itemized tables number each element's row.
+- Excel stores the numbers as values, so re-sorting the sheet by hand does not renumber them. A live formula is an option (open).
+
+**Open**
+- Restart at 1 in each block, or run through the whole table? Currently written as continuous.
+
+**Depends on:** the pipeline in Phase 2, and the built-in field work in Phase 11.
+
+**Done when:** the numbers run from 1 with no gaps across blocks, headers and footers, in both outputs.
+
+### Phase 13: Testing and release
+
+**Goal:** a reliable install and a checklist that catches regressions.
+
+**Automated (no Revit)**
+- Update `test_pipeline.py`, `test_outputs.py` and `test_ui.py` to the current structure.
+- Add tests for appearance, filters and measurement. Formula and evaluator tests exist; run them under IronPython 2.7 in the AbacoTest button, including `STRING` of a float.
+- Run every test file with `python3` on each change.
+
+**Manual checklist (Revit 2024 and 2027; spot-check 2025 and 2026)**
+1. The extension loads, and the ribbon button is present.
+2. Walls: standard and curtain modes build. The preview matches the drawing.
+3. Add a shared parameter. Reorder. Hide in Revit. Switch off in Excel.
+4. Sort and group with header, footer and gap. Confirm the summary block at the bottom.
+5. Wrap text on: the Revit drawing and the preview have the same line breaks, and no row overlaps.
+6. Appearance: each element's bold, italic, underline, case, alignment, lines and background, in both previews and the Excel file.
+7. Calculated field: works through filter, group, footer and summary. A divide-by-zero element shows `#ERROR`.
+8. Custom field removal from the table, then Delete with its confirmation.
+9. Run twice: views update in place. Shrink the table: the surplus view is emptied and reported.
+10. Excel: new file, existing file, file open elsewhere (read-only error), the tab replaced and other tabs intact.
 11. Floors, roofs, doors and windows tables.
-12. Locale check on an Italian-language Revit (localised parameter names, decimal comma).
+12. Italian-language Revit: localised parameter names and the decimal comma.
+13. Dark and light Revit UI: every window control is readable.
+14. Index: numbers run from 1 with no gaps across blocks, headers and footers, in both outputs.
 
-### 6.3 Release
-
-- Version number in `bundle.yaml`; changelog.
-- Install notes: pyRevit 6.4+, CurrentUser attach for Revit 2027, Excel required for the COM writer.
+**Release**
+- Version in `bundle.yaml`, and a changelog.
+- Install notes: pyRevit 6.5 or newer, CurrentUser attach for Revit 2027, desktop Excel for the COM writer, and the two ColorPicker DLLs in `lib/abaco/`.
 - Zip of the extension folder.
 
 ---
 
-## Later (not scheduled)
+## 3. Decisions log
 
-- **Filter tab** (conditions with AND / OR groups, more than Revit's 8).
-- **Shared presets** (named configurations stored on the server).
-- **Conditional formatting** and per-column units.
-- **Direct `.xlsx` writer** (no Excel needed) if COM proves unreliable.
-- **Drag-and-drop** reordering of fields and sort levels.
+| Date | Decision |
+|---|---|
+| 2026-10-02 to 09 | Sort & group is one list of levels, each with Header, Footer and Gap row. |
+| 2026-10-08 | Summary is a block at the bottom: bold "Summary" header, then Total, Min and Max. |
+| 2026-10-08 | Footers use `SUBTOTAL` formulas, so nested footers are not counted twice. |
+| 2026-10-08 | Filter has no quick links. Curtain wall stays a normal field condition. |
+| 2026-10-08 | Appearance has presets. Title is centred in every preset. |
+| 2026-10-08 | Alignment and heading orientation are per element in Appearance. Data rows keep their per-field alignment in Formatting. |
+| 2026-10-08 | Max auto width is removed. Auto columns fit their text. |
+| 2026-10-08 | Text height is set in Appearance, not Settings. Page height stays in Settings. |
+| 2026-10-08 | Revit text colour is not drawn per cell. Excel and the preview draw it. |
+| 2026-10-09 | Dark window follows Revit's UI theme, from Revit 2025. |
+| 2026-10-09 | Colour picker is PixiEditor ColorPicker, with the hex prompt as a fallback. |
+| 2026-10-09 | Custom field kinds: calculated and custom model parameter. Notes are a text custom model parameter. Constant text is removed. |
+| 2026-10-09 | Formula syntax: each value ends with `;`, a block ends with `};`, `else` is required. |
+| 2026-10-09 | Literal errors refuse the save. Element errors save with a warning and `#ERROR`. |
+| 2026-10-09 | Recalculation is live from loaded values. Model re-read only on Re-read model, or a category or table type change. |
+| 2026-10-09 | Dry run loads only the fields a formula refers to, once, until Re-read model. |
+| 2026-10-09 | × in the table moves a field back to Add parameter. Delete removes a custom field everywhere, after confirmation. |
+| 2026-10-09 | Shared parameters: an existing file is used, and none is created. |
+| 2026-10-09 | Build order: editor (Phase 7) before model parameters (Phase 8). |
+| 2026-10-09 | Notes sync with Excel is Phase 10, after model parameters and saved settings. |
+| 2026-10-09 | Moved to v2: per-element typing in the preview, drag and drop reordering, direct `.xlsx` writer, shared presets, Revit per-cell text colour. |
+| 2026-10-09 | Arrays `[ ]` and `len()` are Phase 11, after the custom field features and before testing. |
+| 2026-10-09 | Row index field is Phase 12, one of the last phases: row number from 1, data rows only, numbered after sort and grouping. |
+| 2026-10-13 | Phase 5 formulas: one expression in version 1, `IF(c, a, b)`. Chains and blocks are version 2. |
+| 2026-10-13 | Fields are `{Label}` in the editor and `{key}` stored. Arrays are `[ ]`, version 2. |
+| 2026-10-13 | The absolute-value bars are dropped for `ABS(x)`. Reserved: AND OR IF ELIF ELSE TRUE FALSE SENSITIVE MIN MAX SQRT ROOT ABS INT FLOAT STRING LEN. |
+| 2026-10-13 | Keywords and function names are case-insensitive, shown in capitals; the editor converts on the keystroke after a complete word, never inside `{ }` or `" "`. |
+| 2026-10-13 | Yes/No fields are booleans in formulas. Boolean results show `#TRUE` and `#FALSE`. Empty is `#NONE`. An error wins over NONE. |
+| 2026-10-13 | Units: the exponent of `m` is tracked; suffixes `m`, `m²`, `m³` in version 1; a literal `0` fits any unit; count is dimensionless in products. Version 2 units: `°`, `rad`, `K`, `kg`, `N`, `J`, `W` (`°C`, `g`, `mg` dropped). |
+| 2026-10-13 | Calculated fields are evaluated per row after grouping and recomputed on every table rebuild. |
+| 2026-10-13 | Division by zero is `#ERROR`. `INT` rounds half away from zero; `ROUND(x, n)` comes later. `STRING` keeps a literal's typed text. |
+| 2026-10-13 | Editor: result unit derived and read-only; decimals automatic; the failing-row preview shows only on an error; kind is Calculated or Notes / comments (Notes disabled until Phase 8); keyboard is a two-column grid without scrolling. |
 
 ---
 
-## Phase order and dependencies
+## 4. Open decisions
 
-| Phase | Depends on | Can be tested without Revit |
-|-------|-----------|-----------------------------|
-| 0. Baseline | none | no |
-| 1. Data layer | 0 | partly (records are pure; reader is not) |
-| 2. Pipeline | 1 (record shape only) | **yes** |
-| 3. Output layers | 2 | layout yes; drafting and Excel no |
-| 4. XAML window | 2, 3 | XAML structure only |
-| 5. Saved settings | 4 | yes |
-| 6. Testing and release | all | partly |
+1. **Excel notes sync direction:** both ways with an explicit Sync action (proposed), or one way only?
+2. **Last-synced snapshot:** in the table settings, or on a hidden sheet in the workbook?
+3. **Test project:** a copy with shared parameters and custom families is available for Phase 8 and Phase 10?
+4. **Filters on calculated fields:** run after grouping, on row values (proposed), while model-field filters stay before grouping? A filter that mixes both applies the element filter first, then the row filter.
+5. **Decimal places of a calculated field:** "automatic, from the project settings" means the Revit project's unit rounding for that unit, or Abaco's defaults (length 3, area 2, volume 3, count 0)?
+6. **`Varies` as a formula input:** a grouped row can hold the word `Varies` (or a `min - max` text) in an element field. Applied in code as proposed: the pipeline hands it to the formula as NONE, so the result is `#NONE`. Confirm.
+7. **`NONE AND FALSE`:** applied in code as proposed: a deciding value (FALSE for AND, TRUE for OR) wins on either side, even against NONE, so `NONE AND FALSE` is FALSE. An error is never hidden by it. Confirm.
 
-Phases 1 (record shape) and 2 can start in parallel with Phase 0 testing, because the pipeline is pure Python.
+---
+
+## 5. v2
+
+Planned for v2, after version 1 is released. Arrays and `len()` are not here: they are Phase 11 in version 1.
+
+- Per-element typing of custom model parameter values in the preview.
+- Drag and drop reordering of fields and levels.
+- A direct `.xlsx` writer, if Excel COM proves unreliable. This is also the answer for machines without Excel.
+- Shared presets across a team.
+- Revit text colour per cell, through filled-region labels, if a use case needs it.
+- Formula chains `IF(c): v; ELIF (c): v; ELSE: v;` and blocks `{ ... };`.
+- `ROUND(x, n)`, `STRING(x, n)` with a fixed decimal count, and trigonometric functions.
+- Formula units `°`, `rad`, `K`, `kg`, `N`, `J`, `W`, with a dimension vector and scale factors.

@@ -40,6 +40,10 @@ _CURTAIN_HEIGHT_NAMES = ["WALL_USER_HEIGHT_PARAM"]
 
 _UNITS = {"length": u"m", "area": M2, "volume": u"m\u00b3"}
 
+_SPECS = (("length", DB.SpecTypeId.Length, DB.UnitTypeId.Meters),
+          ("area", DB.SpecTypeId.Area, DB.UnitTypeId.SquareMeters),
+          ("volume", DB.SpecTypeId.Volume, DB.UnitTypeId.CubicMeters))
+
 
 # ------------------------------------------------------------------------------------------ small helpers
 def eid_val(eid):
@@ -300,6 +304,41 @@ def _material_areas(el, tr):
         out[mid] = convert(a, "area")
     return out
 
+# ------------------------------------------------------------------------------------------- decimals
+
+def _decimals_of(acc):
+    """Accuracy 0.001 -> 3, 0.01 -> 2, 1 -> 0. A non-decimal accuracy rounds up to the digits it needs."""
+    if not acc or acc <= 0:
+        return None
+    d = 0
+    while acc < 1 - 1e-9 and d < 10:
+        acc *= 10
+        d += 1
+    return d
+
+
+def project_decimals(doc):
+    """Rounding of the project's units, as decimal places of the metre / m2 / m3 values we write.
+    Revit's Accuracy is in the project's display unit, so it is converted to metres first."""
+    out = {}
+    try:
+        fmt = doc.GetUnits()
+    except Exception:
+        return out
+    for kind, spec, target in _SPECS:
+        try:
+            fo = fmt.GetFormatOptions(spec)
+            unit = fo.GetUnitTypeId()
+            acc = float(fo.Accuracy)
+            acc_target = DB.UnitUtils.ConvertFromInternalUnits(
+                DB.UnitUtils.ConvertToInternalUnits(acc, unit), target)
+            d = _decimals_of(acc_target)
+            if d is not None:
+                out[kind] = d
+        except Exception:
+            continue
+    return out
+
 
 # ------------------------------------------------------------------------------------------- catalogue
 def _scan_params(obj, scope, rs):
@@ -332,6 +371,7 @@ def read_category(doc, category, log=None):
     log = log or (lambda m: None)
     is_walls = eid_val(category.Id) == int(DB.BuiltInCategory.OST_Walls)
     rs = RecordSet(eid_val(category.Id), category.Name)
+    rs.unit_decimals = project_decimals(doc)
     for f in core_fields(is_walls):
         rs.add_field(f)
         rs.loaded_keys.add(f.key)
@@ -380,7 +420,7 @@ def ensure_values(doc, rs, keys, log=None):
         if f is None:
             missing.append(key)
             continue
-        if f.scope in ("layer", "group"):
+        if f.scope in ("layer", "group", "formula"):
             continue                                    # computed by the pipeline, nothing to read
         if f.scope == "type":
             for tid, tr in rs.types.items():

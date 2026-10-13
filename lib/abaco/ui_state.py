@@ -21,7 +21,7 @@ from abaco import appearance as AP
 
 CALC_MODES = P.CALC_MODES
 ALIGN_CHIP = {"left": u"L", "center": u"C", "right": u"R"}
-SCOPE_TEXT = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated"}
+SCOPE_TEXT = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated", "formula": u"custom"}
 EXCEL_BAD = u":\\/?*[]"
 REVIT_BAD = u"\\:{}[]|;<>?`~"
 FOOTER_MODES = [(u"Per field", "field"), (u"Totals", "total"), (u"Min", "min"),

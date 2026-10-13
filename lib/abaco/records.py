@@ -10,11 +10,12 @@ Three levels of data (see development.md 1.1):
   layer    compound-structure layers of a type    -> TypeRecord.layers  (stored once per type)
 plus per-element material areas (ElementRecord.material_areas) for layered types.
 
-Field scopes: element | type | layer | group.  "group" fields (Count) are computed by the pipeline and are
-never stored in a record.
+Field scopes: element | type | layer | group | formula.  "group" fields (Count) are computed by the pipeline and are
+never stored in a record. "formula" fields are custom calculated fields (Phase 6): their definition lives in the
+table settings, the pipeline evaluates them per row, and no record holds a value for them.
 """
 
-SCOPES = ("element", "type", "layer", "group")
+SCOPES = ("element", "type", "layer", "group", "formula")
 KINDS = ("text", "number", "integer", "yesno", "length", "area", "volume", "elementid")
 
 # Stable keys of the built-in fields. Parameter fields use the BuiltInParameter name, the shared-parameter
@@ -42,7 +43,8 @@ M2 = u"m\u00b2"
 class Field(object):
     """Anything that can become a column."""
 
-    def __init__(self, key, label, scope, kind, unit=None, aggregate=None, core=False, group=None):
+    def __init__(self, key, label, scope, kind, unit=None, aggregate=None, core=False, group=None,
+                 result=None, formula=None):
         if scope not in SCOPES:
             raise ValueError("bad scope %r" % (scope,))
         if kind not in KINDS:
@@ -55,15 +57,21 @@ class Field(object):
         self.aggregate = aggregate      # "sum" = the pipeline adds this up when it groups elements
         self.core = core                # built-in field, always in the catalogue
         self.group = group              # Revit parameter group label, e.g. u"Vertical Grid" (tells twins apart)
+        self.result = result            # formula fields: (type kind, unit exponent, is_count) of the checked result
+        self.formula = formula          # formula fields: the stored formula text
+        self.per_row = False            # formula fields that read layer values: one value per layer row
+        self.refs = set()               # formula fields: keys the formula reads (set by attach_custom)
 
     def to_dict(self):
         return dict(key=self.key, label=self.label, scope=self.scope, kind=self.kind,
-                    unit=self.unit, aggregate=self.aggregate, core=self.core, group=self.group)
+                    unit=self.unit, aggregate=self.aggregate, core=self.core, group=self.group,
+                    result=self.result, formula=self.formula)
 
     @staticmethod
     def from_dict(d):
         return Field(d["key"], d["label"], d["scope"], d["kind"], d.get("unit"),
-                     d.get("aggregate"), d.get("core", False), d.get("group"))
+                     d.get("aggregate"), d.get("core", False), d.get("group"),
+                     tuple(d["result"]) if d.get("result") else None, d.get("formula"))
 
     def __repr__(self):
         return "Field(%r, %r, %s, %s)" % (self.key, self.label, self.scope, self.kind)
@@ -157,7 +165,8 @@ class RecordSet(object):
         self.elements = []                  # ElementRecord
         self.loaded_keys = set()            # field keys whose values are filled in
         self.notes = []                     # warnings from the reader
-
+        self.unit_decimals = {}             # kind -> project rounding: {"length": 3, "area": 2, "volume": 3}
+        
     # ---- catalogue
     def add_field(self, field):
         """Returns False (and ignores it) when the key is already in the catalogue."""
@@ -166,6 +175,21 @@ class RecordSet(object):
         self._fields[field.key] = field
         self.fields.append(field)
         return True
+
+    def replace_field(self, field):
+        """Put a field in the catalogue, replacing the one with the same key in place (formula fields are
+        re-attached on every rebuild, with the position they already had)."""
+        if field.key in self._fields:
+            self.fields[self.fields.index(self._fields[field.key])] = field
+        else:
+            self.fields.append(field)
+        self._fields[field.key] = field
+
+    def remove_field(self, key):
+        f = self._fields.pop(key, None)
+        if f is not None:
+            self.fields.remove(f)
+            self.loaded_keys.discard(key)
 
     def has_field(self, key):
         return key in self._fields
@@ -176,7 +200,7 @@ class RecordSet(object):
     def display_labels(self):
         """key -> unique label. Clashes get a scope tag, then the parameter group, then the key:
         'Comments (type)', 'Spacing (type, Vertical Grid)'."""
-        tags = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated"}
+        tags = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated", "formula": u"custom"}
         count = {}
         for f in self.fields:
             count[f.label] = count.get(f.label, 0) + 1

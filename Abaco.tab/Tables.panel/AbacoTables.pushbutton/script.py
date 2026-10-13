@@ -148,6 +148,19 @@ class AbacoWindow(WPFWindow):
             page_h = float(DEFAULTS["page_h"])
         return text_mm, page_h
 
+    def new_state(self, settings):
+        _, _, warns = P.attach_custom(self.rs, settings)     # custom fields enter the catalogue
+        for w in warns:
+            self.log(u"Warning: %s" % w)
+        self.state = US.EditState(self.rs, settings)
+
+    def custom_defs(self):
+        return self.state.settings.get("custom", []) if self.state is not None else []
+
+    def default_settings(self):
+        return P.default_settings(self.rs, self.table_type(), self.tb_title.Text.strip(),
+                                  custom=self.custom_defs())
+
     # ----------------------------------------------------------------------------- model and state
     def table_type(self):
         i = self.table_type_combo.SelectedIndex
@@ -158,9 +171,6 @@ class AbacoWindow(WPFWindow):
         if t == "takeoff" and self.rs is not None and not self.rs.has_layered:
             return u"This category has no layered types: the table is built as a schedule."
         return TYPE_HINTS[t]
-
-    def default_settings(self):
-        return P.default_settings(self.rs, self.table_type(), self.tb_title.Text.strip())
 
     def load_model(self, keep=False):
         cat = self.current_cat()
@@ -174,7 +184,8 @@ class AbacoWindow(WPFWindow):
             self.log(line)
         self.category_info.Text = self.rs.summary_lines()[0]
         self.table_type_note.Text = self.type_note()
-        self.state = US.EditState(self.rs, old if old is not None else self.default_settings())
+        settings = old if old is not None else self.default_settings()
+        self.new_state(settings)
         self.bind_all()
         self.sync_lists()
         self.status(u"Ready")
@@ -187,16 +198,20 @@ class AbacoWindow(WPFWindow):
         s = self.state.settings
         s["title"] = self.tb_title.Text.strip()
         flt = self.filter_tab.to_settings()
+        s["filter"] = flt
         allowed = self.state.table_keys()
-        keys = P.required_keys(s) + [k for k in filters.needed_keys(flt) if k in allowed]
+        keys = P.required_keys(s) + filters.needed_keys(flt)
         rr.ensure_values(doc, self.rs, [k for k in keys if k], self.log)
         fr = filters.apply_filters(self.rs, self.rs.elements, flt, allowed)
         self.filter_result = fr
-        self.filter_tab.show_result(fr)               # per-row errors + "n of N elements match"
+        self.filter_tab.show_result(fr)
         if fr.n_active and fr.matched == 0:
             raise NoMatch()
         rs = filters.filtered_view(self.rs, fr.kept) if fr.n_active else self.rs
-        return runner.build_result(doc, rs, s, self.log)
+        res = runner.build_result(doc, rs, s, self.log)
+        if fr.n_calc and not res.table.n_data_rows():
+            raise NoMatch()
+        return res
 
     # --------------------------------------------------------------------------- binding the lists
     def bind_all(self):
@@ -458,7 +473,7 @@ class AbacoWindow(WPFWindow):
     def fields_reset_click(self, sender, args):
         if self.rs is None:
             return
-        self.state = US.EditState(self.rs, self.default_settings())
+        self.new_state(self.default_settings())
         self.bind_all()
         self.sync_lists()
         self.refresh_preview()
@@ -502,7 +517,7 @@ class AbacoWindow(WPFWindow):
         self.table_type_note.Text = self.type_note()
         if self.rs is None:
             return
-        self.state = US.EditState(self.rs, self.default_settings())   # new template, no rescan
+        self.new_state(self.default_settings())   # new template, no rescan
         self.bind_all()
         self.refresh_preview()
 
