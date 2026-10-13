@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Neutral data model for Abaco Tables (Phase 1). Pure Python: NO Revit imports.
+"""Neutral data model for Abaco Tables. Pure Python: NO Revit imports.
 
-Units: lengths in metres, areas in square metres, volumes in cubic metres, full precision (rounding is a
-formatting concern, Phase 2). Missing values are None. Yes/No parameters are the text u"Yes" / u"No".
+Values are stored in base units: metres, square metres, cubic metres, radians. Core labels are bare names
+('Width', 'Thickness'); the unit is added at output (units.heading_suffix). See units.py.
 
 Three levels of data (see development.md 1.1):
   element  one value set per Revit element        -> ElementRecord.values
@@ -10,20 +10,20 @@ Three levels of data (see development.md 1.1):
   layer    compound-structure layers of a type    -> TypeRecord.layers  (stored once per type)
 plus per-element material areas (ElementRecord.material_areas) for layered types.
 
-Field scopes: element | type | layer | group | formula.  "group" fields (Count) are computed by the pipeline and are
-never stored in a record. "formula" fields are custom calculated fields (Phase 6): their definition lives in the
-table settings, the pipeline evaluates them per row, and no record holds a value for them.
+Field scopes: element | type | layer | group | formula.
+A field's dimension is derived from its kind: length, area, volume, angle or currency. Other kinds have none.
 """
+from abaco import units as U
 
 SCOPES = ("element", "type", "layer", "group", "formula")
-KINDS = ("text", "number", "integer", "yesno", "length", "area", "volume", "elementid")
+KINDS = ("text", "number", "integer", "yesno", "length", "area", "volume", "elementid", "angle", "currency")
 
 # Stable keys of the built-in fields. Parameter fields use the BuiltInParameter name, the shared-parameter
 # GUID, or "id:<ParameterElement id>" (never the localised display name). "@..." = not a parameter.
 K_TYPE_MARK = "ALL_MODEL_TYPE_MARK"
 K_TYPE_NAME = "SYMBOL_NAME_PARAM"
 K_FAMILY = "@FAMILY"
-K_LEVEL = "@LEVEL"                 # walls: base constraint; others: level (same rules as v1)
+K_LEVEL = "@LEVEL"                 # walls: base constraint; others: level
 K_WIDTH = "@WIDTH"
 K_HEIGHT = "@HEIGHT"
 K_LENGTH = "@LENGTH"               # element curve length; the pipeline sums it per group
@@ -35,42 +35,46 @@ K_LAYER_MATERIAL = "@LAYER_MATERIAL"
 K_LAYER_THICKNESS = "@LAYER_THICKNESS"
 K_LAYER_FUNCTION = "@LAYER_FUNCTION"
 K_LAYER_AREA = "@LAYER_AREA"       # material area, taken from ElementRecord.material_areas
-K_IS_CURTAIN = "@IS_CURTAIN" 
+K_IS_CURTAIN = "@IS_CURTAIN"
 
-M2 = u"m\u00b2"
+DIM_OF_KIND = dict((k, k) for k in ("length", "area", "volume", "angle", "currency"))
 
 
 class Field(object):
-    """Anything that can become a column."""
+    """Anything that can become a column. Dimension is derived from kind; it cannot disagree with it."""
 
-    def __init__(self, key, label, scope, kind, unit=None, aggregate=None, core=False, group=None,
+    def __init__(self, key, label, scope, kind, aggregate=None, core=False, group=None,
                  result=None, formula=None):
         if scope not in SCOPES:
             raise ValueError("bad scope %r" % (scope,))
         if kind not in KINDS:
             raise ValueError("bad kind %r" % (kind,))
         self.key = key
-        self.label = label
+        self.label = label                  # bare name, no unit: 'Width', not 'Width (m)'
         self.scope = scope
         self.kind = kind
-        self.unit = unit
-        self.aggregate = aggregate      # "sum" = the pipeline adds this up when it groups elements
-        self.core = core                # built-in field, always in the catalogue
-        self.group = group              # Revit parameter group label, e.g. u"Vertical Grid" (tells twins apart)
-        self.result = result            # formula fields: (type kind, unit exponent, is_count) of the checked result
-        self.formula = formula          # formula fields: the stored formula text
-        self.per_row = False            # formula fields that read layer values: one value per layer row
-        self.refs = set()               # formula fields: keys the formula reads (set by attach_custom)
+        self.dim = DIM_OF_KIND.get(kind)    # None for counts, ratios, yes/no and text
+        self.aggregate = aggregate          # "sum" = the pipeline adds this up when it groups elements
+        self.core = core                    # built-in field, always in the catalogue
+        self.group = group                  # Revit parameter group label, e.g. u"Vertical Grid"
+        self.result = result                # formula fields: (type kind, unit exponent, is_count)
+        self.formula = formula              # formula fields: the stored formula text
+        self.per_row = False                # formula fields that read layer values: one value per layer row
+        self.refs = set()                   # formula fields: keys the formula reads (set by attach_custom)
+
+    @property
+    def base_unit(self):
+        return U.BASE_UNIT.get(self.dim) if self.dim else None
 
     def to_dict(self):
         return dict(key=self.key, label=self.label, scope=self.scope, kind=self.kind,
-                    unit=self.unit, aggregate=self.aggregate, core=self.core, group=self.group,
+                    aggregate=self.aggregate, core=self.core, group=self.group,
                     result=self.result, formula=self.formula)
 
     @staticmethod
     def from_dict(d):
-        return Field(d["key"], d["label"], d["scope"], d["kind"], d.get("unit"),
-                     d.get("aggregate"), d.get("core", False), d.get("group"),
+        return Field(d["key"], d["label"], d["scope"], d["kind"], d.get("aggregate"),
+                     d.get("core", False), d.get("group"),
                      tuple(d["result"]) if d.get("result") else None, d.get("formula"))
 
     def __repr__(self):
@@ -78,33 +82,31 @@ class Field(object):
 
 
 def core_fields(is_walls=False):
-    """The built-in fields of v1 (always present). Labels match the v1 headings exactly."""
+    """The built-in fields of v1 (always present). Labels are bare; units come from the dimension."""
     fields = [
         Field(K_TYPE_MARK, u"Type Mark", "type", "text", core=True),
         Field(K_TYPE_NAME, u"Wall Type Name" if is_walls else u"Type Name", "type", "text", core=True),
         Field(K_FAMILY, u"Family", "type", "text", core=True),
         Field(K_LAYER_ORDER, u"Order", "layer", "integer", core=True),
         Field(K_LAYER_MATERIAL, u"Material", "layer", "text", core=True),
-        Field(K_LAYER_THICKNESS, u"Thickness (m)", "layer", "length", u"m", core=True),
+        Field(K_LAYER_THICKNESS, u"Thickness", "layer", "length", core=True),
         Field(K_LAYER_FUNCTION, u"Function", "layer", "text", core=True),
-        Field(K_LAYER_AREA, u"Material Area (%s)" % M2, "layer", "area", M2, core=True),
+        Field(K_LAYER_AREA, u"Material Area", "layer", "area", core=True),
         Field(K_LEVEL, u"Base Constraint" if is_walls else u"Level", "element", "text", core=True),
-        Field(K_WIDTH, u"Width (m)", "element", "length", u"m", core=True),
-        Field(K_HEIGHT, u"Height (m)", "element", "length", u"m", core=True),
-        Field(K_LENGTH, u"Total Length (m)", "element", "length", u"m", aggregate="sum", core=True),
-        Field(K_AREA, u"Area (%s)" % M2, "element", "area", M2, aggregate="sum", core=True),
+        Field(K_WIDTH, u"Width", "element", "length", core=True),
+        Field(K_HEIGHT, u"Height", "element", "length", core=True),
+        Field(K_LENGTH, u"Total Length", "element", "length", aggregate="sum", core=True),
+        Field(K_AREA, u"Area", "element", "area", aggregate="sum", core=True),
         Field(K_COUNT, u"Count", "group", "integer", core=True),
         Field(K_ELEMENT_ID, u"Element Id", "element", "integer", core=True),
     ]
-
     if is_walls:
         fields.insert(3, Field(K_IS_CURTAIN, u"Curtain Wall", "type", "yesno", core=True))
     return fields
 
 
-
 class Layer(object):
-    """One layer of a compound structure (type level)."""
+    """One layer of a compound structure (type level). Thickness in metres."""
 
     def __init__(self, order, material_id, material, thickness, function):
         self.order = order                  # 1-based
@@ -154,7 +156,7 @@ class ElementRecord(object):
 
 
 class RecordSet(object):
-    """Everything read from one category: field catalogue + types + elements."""
+    """Everything read from one category: field catalogue, types, elements and project units."""
 
     def __init__(self, category_id, category_name):
         self.category_id = category_id
@@ -165,8 +167,9 @@ class RecordSet(object):
         self.elements = []                  # ElementRecord
         self.loaded_keys = set()            # field keys whose values are filled in
         self.notes = []                     # warnings from the reader
-        self.unit_decimals = {}             # kind -> project rounding: {"length": 3, "area": 2, "volume": 3}
-        
+        # dimension -> (unit label, decimals) from Revit's Project Units. Empty = use units.DEFAULT_*.
+        self.project = {}
+
     # ---- catalogue
     def add_field(self, field):
         """Returns False (and ignores it) when the key is already in the catalogue."""
@@ -177,8 +180,7 @@ class RecordSet(object):
         return True
 
     def replace_field(self, field):
-        """Put a field in the catalogue, replacing the one with the same key in place (formula fields are
-        re-attached on every rebuild, with the position they already had)."""
+        """Put a field in the catalogue, replacing the one with the same key in place."""
         if field.key in self._fields:
             self.fields[self.fields.index(self._fields[field.key])] = field
         else:
@@ -198,9 +200,10 @@ class RecordSet(object):
         return self._fields.get(key)
 
     def display_labels(self):
-        """key -> unique label. Clashes get a scope tag, then the parameter group, then the key:
-        'Comments (type)', 'Spacing (type, Vertical Grid)'."""
-        tags = {"element": u"instance", "type": u"type", "layer": u"layer", "group": u"calculated", "formula": u"custom"}
+        """key -> unique bare label. Clashes get a scope tag, then the parameter group, then the key:
+        'Comments (type)', 'Spacing (type, Vertical Grid)'. No unit: see base_labels()."""
+        tags = {"element": u"instance", "type": u"type", "layer": u"layer",
+                "group": u"calculated", "formula": u"custom"}
         count = {}
         for f in self.fields:
             count[f.label] = count.get(f.label, 0) + 1
@@ -219,6 +222,15 @@ class RecordSet(object):
                 t = u"%s [%s]" % (t, f.key)
             used.add(t)
             out[f.key] = t
+        return out
+
+    def base_labels(self):
+        """key -> label with the base unit, for the Filter list and the formula editor: 'Width (m)'.
+        Formulas and filters compare base values, so the labels show the unit they compare in."""
+        out = {}
+        for key, lab in self.display_labels().items():
+            suffix = self._fields[key].base_unit
+            out[key] = lab + (u" (%s)" % suffix if suffix else u"")
         return out
 
     # ---- data
@@ -241,7 +253,7 @@ class RecordSet(object):
         raise KeyError("%s is not an element or type field" % key)
 
     def elements_in_mode(self, curtain):
-        """Walls: curtain walls only (True) or everything else (False). Other categories: use False."""
+        """Walls: curtain walls only (True) or everything else (False)."""
         return [e for e in self.elements if self.types[e.type_id].is_curtain == bool(curtain)]
 
     @property

@@ -122,9 +122,8 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 - A cell in a column with a calculation shows the calculated value of its elements. Otherwise it shows the value, or "Varies".
 - Sort and group only use fields checked in the Fields tab.
 - Footers add up each element once, even for layered walls.
+- `test_pipeline.py` rewritten for the level list, curtain walls as a filter, and collapsed gap rows (26 tests)
 
-**To do**
-- Update `test_pipeline.py` to the level list and `SUBTOTAL` (both still use the old keys).
 
 ### Phase 3: Output layers
 
@@ -192,7 +191,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 
 **Goal:** calculated fields work in the table like any other field.
 
-**Status (13 October 2026):** catalogue, storage and the pipeline stage are done: `pipeline.attach_custom()` and `apply_formulas()`, scope `formula`, `tests/test_custom.py` (21 tests). Still to do: filters on calculated fields, decimals from project settings, and the UI hooks (call `attach_custom` when a category is read, keep `custom` across Reset, show custom fields in Add parameter).
+Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are done. Custom fields appear in Add parameter, survive Reset, Re-read model and table type changes, and enable Edit and Delete on their rows. Tests: test_custom.py (21), test_ui.py (14). Still open: decimals from project settings (Open decision 5), a Revit test of filters on calculated fields, and Edit and Delete handlers (Phase 7).
 
 **Scope**
 - Custom fields enter the catalogue with type and scope, and are marked as custom. The result type comes from the checked formula.
@@ -319,6 +318,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 - Update `test_pipeline.py`, `test_outputs.py` and `test_ui.py` to the current structure.
 - Add tests for appearance, filters and measurement. Formula and evaluator tests exist; run them under IronPython 2.7 in the AbacoTest button, including `STRING` of a float.
 - Run every test file with `python3` on each change.
+- All nine test files pass under `tests/run_all.py` (custom 21, evaluate 26, filters 15, formula 29, formula integration 2, outputs 15, pipeline 26, records 9, ui 14). Run with `python3 tests/run_all.py` after every change.
 
 **Manual checklist (Revit 2024 and 2027; spot-check 2025 and 2026)**
 1. The extension loads, and the ribbon button is present.
@@ -379,6 +379,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 | 2026-10-13 | Calculated fields are evaluated per row after grouping and recomputed on every table rebuild. |
 | 2026-10-13 | Division by zero is `#ERROR`. `INT` rounds half away from zero; `ROUND(x, n)` comes later. `STRING` keeps a literal's typed text. |
 | 2026-10-13 | Editor: result unit derived and read-only; decimals automatic; the failing-row preview shows only on an error; kind is Calculated or Notes / comments (Notes disabled until Phase 8); keyboard is a two-column grid without scrolling. |
+| 2026-10-13 | Units and decimals: the project default comes from Revit’s Project Units (Manage tab) for each dimension. The Formatting tab can override the unit and the decimal places per field. Decimal places: 0 to 4 (1234, 1234.0, 1234.00, 1234.000, 1234.0000). Units by dimension: length (mm, cm, m, Km), area (mm2, cm2, m2, Km2), volume (mm3, cm3, m3, Km3), angle (rad, °, ‘, ‘’), currency ($, €, ¥ JPY, £, ¥ CNY). Fields with no dimension (counts, ratios, yes/no, text) have no unit drop-down. Stored values stay in base units (m, m², m³, radians); conversion happens only at output, after sorting, grouping, footers and formulas.
 
 ---
 
@@ -388,9 +389,8 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 2. **Last-synced snapshot:** in the table settings, or on a hidden sheet in the workbook?
 3. **Test project:** a copy with shared parameters and custom families is available for Phase 8 and Phase 10?
 4. **Filters on calculated fields:** run after grouping, on row values (proposed), while model-field filters stay before grouping? A filter that mixes both applies the element filter first, then the row filter.
-5. **Decimal places of a calculated field:** "automatic, from the project settings" means the Revit project's unit rounding for that unit, or Abaco's defaults (length 3, area 2, volume 3, count 0)?
-6. **`Varies` as a formula input:** a grouped row can hold the word `Varies` (or a `min - max` text) in an element field. Applied in code as proposed: the pipeline hands it to the formula as NONE, so the result is `#NONE`. Confirm.
-7. **`NONE AND FALSE`:** applied in code as proposed: a deciding value (FALSE for AND, TRUE for OR) wins on either side, even against NONE, so `NONE AND FALSE` is FALSE. An error is never hidden by it. Confirm.
+5. **`Varies` as a formula input:** a grouped row can hold the word `Varies` (or a `min - max` text) in an element field. Applied in code as proposed: the pipeline hands it to the formula as NONE, so the result is `#NONE`. Confirm.
+6. **`NONE AND FALSE`:** applied in code as proposed: a deciding value (FALSE for AND, TRUE for OR) wins on either side, even against NONE, so `NONE AND FALSE` is FALSE. An error is never hidden by it. Confirm.
 
 ---
 

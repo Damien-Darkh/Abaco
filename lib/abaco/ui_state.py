@@ -271,6 +271,11 @@ class EditState(object):
     def _usable(self, f):
         return f.scope != "layer" or P.effective_type(self.rs, self.settings) == "takeoff"
 
+    def is_custom(self, key):
+        """True for a calculated (formula-scope) field, the only kind Edit and Delete apply to."""
+        f = self.rs.field(key)
+        return f is not None and f.scope == "formula"
+
     # ---- fields
     def field_rows(self, on_change=None):
         """Only show fields that are set to appear somewhere (Hidden=false OR Excel=true)."""
@@ -411,7 +416,7 @@ class EditState(object):
 
     def format_values(self, key):
         st = self._st(key)
-        return {"heading": self.heading(key), "orientation": st.get("orientation") or "horizontal",
+        return {"heading": self.heading(key),
                 "align": st.get("align") or "left", "widthMm": st.get("widthMm"),
                 "calc": st.get("calc") or "none", "hidden": bool(st.get("hiddenInRevit")),
                 "excel": bool(st.get("showInExcel", True))}

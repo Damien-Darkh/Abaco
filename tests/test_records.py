@@ -24,12 +24,16 @@ def make_set():
     return rs
 
 
-def test_core_labels_match_v1():
+def test_core_labels_are_bare_and_carry_a_dimension():
     labels = [f.label for f in core_fields(True)]
     assert u"Wall Type Name" in labels and u"Base Constraint" in labels
+    assert u"Thickness" in labels and u"Material Area" in labels and u"Total Length" in labels
+    assert not any(u"(" in l for l in labels)
+    f = [x for x in core_fields(True) if x.key == K_LAYER_AREA][0]
+    assert f.dim == "area" and f.base_unit == u"m\u00b2"
     labels = [f.label for f in core_fields(False)]
     assert u"Type Name" in labels and u"Level" in labels
-    assert u"Material Area (m\u00b2)" in labels and u"Total Length (m)" in labels
+    assert [x.dim for x in core_fields(False) if x.key == K_COUNT] == [None]
 
 
 def test_add_field_ignores_duplicates():

@@ -173,6 +173,10 @@ def _kind_of(p):
             if spec.Equals(DB.SpecTypeId.Volume):
                 return "volume"
         return "number"                     # other specs (angle, ...): raw internal value
+    if DB.SpecTypeId.Angle is not None and spec is not None and spec.Equals(DB.SpecTypeId.Angle):
+        return "angle"
+    if spec is not None and spec.Equals(DB.SpecTypeId.Currency):
+        return "currency"
     return None
 
 

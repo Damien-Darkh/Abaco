@@ -71,23 +71,17 @@ def test_duplicate_labels_stay_apart():
     assert fs(st.settings, u"T-2")["heading"] == u"Remarks (type)"        # heading keeps the two apart
 
 
-def test_sort_operations():
+def test_level_operations():
     st = _state()
-    n = len(st.settings["sort"])
-    st.sort_add()
-    assert len(st.settings["sort"]) == n + 1
-    new = st.settings["sort"][-1]["key"]
-    assert new not in [s["key"] for s in st.settings["sort"][:-1]]
-    st.sort_set(n, descending=True, gap=True)
-    assert st.settings["sort"][n]["dir"] == "desc" and st.settings["sort"][n]["gap"] is True
-    st.sort_set(n, label=st.label(K_WIDTH))
-    assert st.settings["sort"][n]["key"] == K_WIDTH
-    rows = st.sort_rows()
-    assert rows[n].Index == n + 1 and rows[n].Descending and rows[n].Column == st.label(K_WIDTH)
-    st.sort_remove(n)
-    assert len(st.settings["sort"]) == n
-    st.sort_clear()
-    assert st.settings["sort"] == []
+    n = len(st.settings["levels"])
+    st.level_add()
+    assert len(st.settings["levels"]) == n + 1
+    new = st.settings["levels"][-1]["key"]
+    assert new not in [s["key"] for s in st.settings["levels"][:-1]]
+    st.level_remove(n)
+    assert len(st.settings["levels"]) == n
+    st.level_clear()
+    assert st.settings["levels"] == []
 
 
 def _widths(st):
@@ -98,13 +92,15 @@ def _widths(st):
 
 def test_descending_sort_reverses_the_order():
     st = _state()
-    st.settings["sort"] = [P.sort_setting(K_WIDTH)]
+    st.settings["levels"] = [P.sort_setting(K_WIDTH)]          # width only, so the order is global
     up = _widths(st)
     assert len(up) > 1 and up == sorted(up)
-    st.sort_set(0, descending=True)
+
+    row = st.level_rows()[0]
+    row.Descending = True                                      # what the UI does on a user edit
+    st.level_update(0, row)
     down = _widths(st)
     assert down == sorted(down, reverse=True) and up != down
-
 
 def test_format_set_values_and_rows():
     st = _state()
@@ -131,14 +127,16 @@ def test_heading_equal_to_label_is_not_stored():
 def test_watched_properties_call_back_only_on_user_edits():
     seen = []
     row = US.FieldRow(u"k", u"Label", True, u"", lambda r, n: seen.append(n))
-    assert row.Include is True and seen == []              # building the row is not an edit
+    assert row.Include is True and seen == []                  # building the row is not an edit
     row.Include = False
-    row.Include = False                                     # same value: no second call
+    row.Include = False                                        # same value: no second call
     assert seen == ["Include"] and row.Include is False
-    srow = US.SortRow(1, [u"a"], u"a", False, False, lambda r, n: seen.append(n))
-    srow.Descending = True
-    srow.GapRow = True
-    assert seen[1:] == ["Descending", "GapRow"]
+
+    lrow = US.LevelRow(1, [u"a"], u"a", False, False, False, False, "field",
+                       lambda r, n: seen.append(n))
+    lrow.Descending = True
+    lrow.Gap = True
+    assert seen[1:] == ["Descending", "Gap"]
 
 
 def test_excel_view_kinds_and_decimals():
@@ -148,9 +146,12 @@ def test_excel_view_kinds_and_decimals():
     tbl = P.build_table(rs, s).excel
     heads, rows, kinds = PV.excel_view(tbl)
     assert len(heads) == len(tbl.columns) and len(rows) == len(kinds)
-    assert kinds.count("blank") == len(tbl.blocks) - 1
     assert kinds.count("data") == tbl.n_data_rows()
-    assert 1 <= kinds.count("total") <= len(tbl.blocks)
+    # gap rows: never two in a row, never first or last
+    assert all(not (a == "blank" and b == "blank") for a, b in zip(kinds, kinds[1:]))
+    assert kinds[0] != "blank" and kinds[-1] != "blank"
+    # footers are on the Type Mark level: one Total per segment (D1 L0, D2 L0, D1 L1)
+    assert kinds.count("total") == 3
     wi = heads.index(u"Width (m)")
     shown = [r[wi] for r, k in zip(rows, kinds) if k == "data" and r[wi]]
     assert shown and all(re.match(r"^\d+\.\d{3}$", x) for x in shown)      # 3 decimals like the Excel number format
@@ -173,6 +174,27 @@ def test_canvas_primitives_stack_pages_and_scale():
     items = PV.ruler_items(lay, 4.0)
     assert len(items) == lay.n_cols and abs(sum(w_ for _, w_ in items) - w) < 1e-6
 
+
+def test_custom_fields_in_add_parameter_and_reset():
+    rs = doors()
+    s = settings(rs)
+    s["custom"] = [{"key": u"calc:1", "name": u"Door Area", "formula": u"{@WIDTH} * {@HEIGHT}"}]
+    P.attach_custom(rs, s)
+    st = US.EditState(rs, s)
+
+    sug = st.suggestions(u"door area")
+    assert [r.key for r in sug] == [u"calc:1"] and sug[0].ScopeText == u"custom"
+    assert st.is_custom(u"calc:1") and not st.is_custom(K_WIDTH)
+
+    assert st.add_field(u"calc:1")
+    assert u"calc:1" not in [r.key for r in st.suggestions(u"")]
+    assert st.is_custom(u"calc:1")
+
+    st.remove_field(u"calc:1")                                 # back to Add parameter
+    assert u"calc:1" in [r.key for r in st.suggestions(u"door area")]
+
+    kept = P.default_settings(rs, "schedule", u"", custom=s["custom"])["custom"]
+    assert kept == s["custom"]                                 # Reset keeps the definitions
 
 def test_validation_helpers():
     assert US.parse_decimal(u"2,5") == 2.5 and US.parse_decimal(u" 3.25 ") == 3.25

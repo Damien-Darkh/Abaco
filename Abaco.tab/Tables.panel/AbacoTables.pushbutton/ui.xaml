@@ -4,7 +4,7 @@
         WindowStartupLocation="CenterScreen" Background="#F4F5F7"
         FontFamily="Segoe UI" FontSize="12" UseLayoutRounding="True" SnapsToDevicePixels="True"
         ShowInTaskbar="False" Foreground="#1C1F24">
-    <Canvas x:Name="canvasRoot" Background="White">
+
 
     <!--
     CODE CONTRACT (script.py)
@@ -1272,5 +1272,4 @@
                     Style="{StaticResource PrimaryButton}" Click="run_click"/>
         </DockPanel>
     </Grid>
-</Canvas>
 </Window>

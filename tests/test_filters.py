@@ -164,6 +164,21 @@ def test_parse_number():
     assert F.parse_number(u"x") is None and F.parse_number(None) is None
 
 
+def test_any_mode_keeps_calculated_condition_when_model_condition_is_not_loaded():
+    """split() must agree with apply_filters(): a model condition on an unloaded field is not live,
+    so the calculated condition is not dropped in Any (OR) mode."""
+    from abaco.records import Field
+    rs = make_set()
+    rs.add_field(Field(u"@CALC", u"Calc", "formula", "number", result=("num", 0, False)))
+    rs.loaded_keys.discard(K_LEVEL)
+    conds = [c(K_LEVEL, "eq", u"L0"), c(u"@CALC", "gt", u"1")]
+    model_idx, calc_idx, dropped = F.split(rs, {"match": "any", "conditions": conds})
+    assert calc_idx == [1] and dropped == {}
+    res = F.apply_filters(rs, rs.elements, {"match": "any", "conditions": conds})
+    assert res.errors[0] == u"values of 'Base Constraint' are not loaded yet"
+    assert res.errors[1] == u""
+    
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for n, f in tests:

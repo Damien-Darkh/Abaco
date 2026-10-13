@@ -186,8 +186,6 @@ def normalize_settings(d):
 
 
 def split(rs, settings):
-    """-> (model_idx, calc_idx, dropped). In Any (OR) mode a calculated condition is dropped only when an
-    active (complete, valid) model condition is also present."""
     s = normalize_settings(settings)
     model_idx, calc_idx, dropped = [], [], {}
     for i, c in enumerate(s["conditions"]):
@@ -197,13 +195,14 @@ def split(rs, settings):
         else:
             model_idx.append(i)
     if calc_idx and s["match"] == MATCH_ANY:
-        live = [i for i in model_idx if status(s["conditions"][i], rs.field(s["conditions"][i]["key"]), None)[0] == "ok"]
+        live = [i for i in model_idx
+                if status(s["conditions"][i], rs.field(s["conditions"][i]["key"]),
+                          rs.loaded_keys)[0] == "ok"]
         if live:
             for i in calc_idx:
                 dropped[i] = MIXED_OR_MSG
             calc_idx = []
     return model_idx, calc_idx, dropped
-
 
 # ------------------------------------------------------------------------------------------------ stage
 class FilterResult(object):
@@ -260,7 +259,8 @@ def apply_filters(rs, elements, settings, allowed=None):
             n_incomplete += 1
 
     for i, msg in dropped.items():
-        errors[i] = msg
+        if not errors[i]:
+            errors[i] = msg
 
     n_calc = 0
     for i in calc_idx:

@@ -434,8 +434,7 @@ class AbacoWindow(WPFWindow):
 
     # ------------------------------------------------------------------ Add parameter icon column
     def _is_custom(self, row):
-        """TODO Phase 7: return True when the row is a custom field (SuggestRow gets an is_custom flag)."""
-        return False
+        return self.state is not None and self.state.is_custom(row.key)
 
     def update_suggest_buttons(self):
         row = self.suggest_list.SelectedItem

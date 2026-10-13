@@ -1,31 +1,31 @@
 # -*- coding: utf-8 -*-
-"""Phase 2 pipeline: RecordSet + settings -> table. Pure Python, no Revit imports.
+"""Pipeline (Phase 2): records + settings -> table. Pure Python, no Revit imports.
 
-Stages (each one a plain function, tested on its own):
-  1 select_columns     settings.fields            -> ordered ColumnSpec list
-  2 build_rows         records                    -> Rows (grouped or itemized, layers expanded)
-  3 apply_varies       grouped rows               -> element values merged, or the word "Varies"
-  3b apply_formulas    rows                       -> custom (formula) fields, evaluated per row (Phase 6)
-  4 sort_and_block     rows, settings.sort        -> blocks (a new block where a gap-flagged key changes)
-  5 add_calculations   blocks                     -> + total / min / max rows, optional grand totals
-  6 format_cells       blocks                     -> numbers rounded per column
-  7 split outputs      Table                      -> excel_table / revit_table (column subsets)
+Stages:
+  0   check_calc_modes     unknown calculation modes are refused
+  1   select_columns       settings.fields -> ColumnSpec list (unit and decimals resolved here)
+  2   build_rows           records -> Rows (grouped or itemized, layers expanded), base units
+  3   apply_varies         element values merged, or 'Varies', or a calculated value
+  3b  apply_formulas       custom (formula) fields, per row, base units
+  4   sort and blocks      levels -> blocks, base units
+  5   footers and summary  total / min / max rows, base units
+  6   format_cells         markers only (#NONE #ERROR #TRUE #FALSE)
+  7   Table._line          base -> display unit. The only conversion point.
 
-Default settings per template (layered / curtain / simple) reproduce the v1 table row for row.
-The values of every field the settings use must be loaded first: revit_reader.ensure_values(doc, rs,
-required_keys(settings)).
+Values are base units (m, m2, m3, rad) everywhere except Table._line output.
+The values of every field the settings use must be loaded first: revit_reader.ensure_values().
 """
 import re
 
 from abaco.records import (
-    K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID, K_COUNT,
-    K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA, K_IS_CURTAIN)
+    Field, K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID,
+    K_COUNT, K_LAYER_ORDER, K_LAYER_MATERIAL, K_LAYER_THICKNESS, K_LAYER_FUNCTION, K_LAYER_AREA, K_IS_CURTAIN)
 
 from abaco import appearance as AP
 from abaco import evaluate as EV
-from abaco import formula as FM
-from abaco.records import Field
 from abaco import filters
+from abaco import formula as FM
+from abaco import units as U
 
 try:
     _STR = (basestring,)
@@ -34,7 +34,7 @@ except NameError:
 
 _NUM = (int, float)
 try:
-    _NUM = _NUM + (type(2 ** 64),)      # long on Python 2 / IronPython 2.7, int on Python 3
+    _NUM = _NUM + (type(2 ** 64),)      # long on Python 2 / IronPython 2.7
 except Exception:
     pass
 
@@ -42,20 +42,14 @@ CALC_MODES = ("none", "total", "min", "max", "minmax")
 DEFAULT_LABELS = {"varies": u"Varies", "total": u"Total", "min": u"Min", "max": u"Max",
                   "grand": u"Grand total", "no_layers": u"(no layers)", "summary": u"Summary"}
 
-# decimals that reproduce v1; other fields fall back on the kind
-_KEY_DECIMALS = {K_LAYER_THICKNESS: 4, K_WIDTH: 3, K_HEIGHT: 3, K_LENGTH: 2, K_AREA: 2, K_LAYER_AREA: 2}
-_KIND_DECIMALS = {"length": 3, "area": 2, "volume": 3, "number": 3}
-
+NUMERIC_KINDS = ("number", "integer", "length", "area", "volume", "angle", "currency")
 ROW_DATA, ROW_TOTAL, ROW_MIN, ROW_MAX = "data", "total", "min", "max"
 ROW_GTOTAL, ROW_GMIN, ROW_GMAX = "gtotal", "gmin", "gmax"
 CALC_ROW_KINDS = (ROW_TOTAL, ROW_MIN, ROW_MAX, ROW_GTOTAL, ROW_GMIN, ROW_GMAX)
 ROW_BLANK, ROW_HEADER = "blank", "header"
+ROW_SUMHEAD = "sumhead"                 # "Summary" header row at the bottom of the table
 
-ROW_SUMHEAD = "sumhead"             # "Summary" header row at the bottom of the table
-
-_MARKERS = (u"#NONE", u"#ERROR", u"#TRUE", u"#FALSE")      # what a formula cell shows; case is never changed
-
-
+_MARKERS = (u"#NONE", u"#ERROR", u"#TRUE", u"#FALSE")
 _KIND_EL = {ROW_DATA: "data", ROW_HEADER: "header", ROW_SUMHEAD: "summaryHeader",
             ROW_TOTAL: "summary", ROW_MIN: "summary", ROW_MAX: "summary",
             ROW_GTOTAL: "summary", ROW_GMIN: "summary", ROW_GMAX: "summary"}
@@ -63,8 +57,10 @@ _KIND_EL = {ROW_DATA: "data", ROW_HEADER: "header", ROW_SUMHEAD: "summaryHeader"
 
 # ------------------------------------------------------------------------------------------- settings
 def field_setting(key, **kw):
-    d = {"key": key, "include": True, "heading": None, "align": "left", "orientation": "horizontal",
-         "widthMm": None, "hiddenInRevit": False, "showInExcel": True, "calc": "none", "decimals": None}
+    d = {"key": key, "include": True, "heading": None, "tag": None,
+         "unit": None, "decimals": None,
+         "align": "left", "widthMm": None, "hiddenInRevit": False, "showInExcel": True,
+         "calc": "none"}
     d.update(kw)
     return d
 
@@ -87,6 +83,7 @@ def sort_setting(key, direction="asc", header=False, footer=False, gap=False, fo
     return {"key": key, "dir": direction, "header": bool(header), "footer": bool(footer),
             "gap": bool(gap), "footerCalc": footer_calc}
 
+
 def default_settings(rs, table_type="schedule", title=u"", custom=None):
     ttype = effective_type(rs, {"tableType": table_type})
     walls = is_walls(rs)
@@ -107,17 +104,18 @@ def default_settings(rs, table_type="schedule", title=u"", custom=None):
     if ttype == "takeoff":
         hidden |= set([K_LAYER_ORDER, K_LAYER_FUNCTION])
     if walls:
-        hidden.add(K_TYPE_NAME)                            # v1 default hidden columns
+        hidden.add(K_TYPE_NAME)
     fields = []
     for k in keys:
         extra = {}
         if k == K_AREA and ttype == "takeoff" and walls:
-            extra["heading"] = u"Wall Area (m\u00b2)"      # v1 heading
+            extra["heading"] = u"Wall Area"                # bare name; the unit suffix is added at output
         fields.append(field_setting(k, hiddenInRevit=(k in hidden), **extra))
     levels = ([sort_setting(k, gap=True, footer=(i == len(group) - 1)) for i, k in enumerate(group)]
               + [sort_setting(k) for k in sort])
     return {"category": rs.category_id, "tableType": ttype, "title": title, "fields": fields,
-            "levels": levels, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS), "appearance": AP.preset("bw"),
+            "levels": levels, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS),
+            "appearance": AP.preset("bw"),
             "custom": [dict(d) for d in (custom or []) if isinstance(d, dict)]}
 
 
@@ -126,61 +124,93 @@ def required_keys(settings):
     keys += [s["key"] for s in settings.get("levels", []) if s.get("key")]
     return keys
 
+
+def check_calc_modes(settings):
+    """Unknown calculation modes are refused, not ignored: a dropped footer is silently wrong."""
+    bad = []
+    for f in settings.get("fields", []):
+        mode = f.get("calc") or "none"
+        if mode not in CALC_MODES:
+            bad.append(u"'%s' has unknown calculation '%s'" % (f.get("key"), mode))
+    if bad:
+        raise ValueError(u"; ".join(bad) + u". Allowed: " + u", ".join(CALC_MODES))
+
+
 def _norm_heading(v):
     return re.sub(r"\s+", " ", _s(v) if v else u"").strip().lower()
 
 
 def apply_hidden_headings(rs, settings, text):
-    """Set hiddenInRevit from a ';' or ',' separated list of headings (the v1 'hidden columns' box).
-    A field matches by its heading in the settings or by its catalogue label, case-insensitive.
-    Everything not listed is shown. Type Mark is never hidden."""
+    """Set hiddenInRevit from a ';' or ',' separated list (the v1 'hidden columns' box).
+    A field matches by its heading override, its bare label, or its label with any allowed unit
+    ('Width (m)'). Everything not listed is shown. Type Mark is never hidden."""
     wanted = set(_norm_heading(x) for x in re.split(r"[;,]", _s(text) if text else u"") if x.strip())
     for st in settings.get("fields", []):
         f = rs.field(st["key"])
         names = set([_norm_heading(st.get("heading"))])
         if f is not None:
             names.add(_norm_heading(f.label))
+            if f.dim:
+                for unit in U.allowed_units(f.dim):
+                    names.add(_norm_heading(u"%s (%s)" % (f.label, unit)))
         names.discard(u"")
         st["hiddenInRevit"] = bool(wanted & names) and st["key"] != K_TYPE_MARK
     return settings
 
 
 # ----------------------------------------------------------------------------------------------- model
+def project_default(rs, dim):
+    """(unit, decimals) of the project for a dimension: Revit's Project Units, else the metric defaults."""
+    p = rs.project.get(dim)
+    if p:
+        return p
+    return U.DEFAULT_UNIT.get(dim), U.DEFAULT_DECIMALS.get(dim)
+
+
 class ColumnSpec(object):
-    def __init__(self, field, st, unit_decimals=None):
+    """One column. unit and decimals are resolved here: the field's override, else the project default.
+    Non-dimensioned fields have unit None; their decimals come from the override (number kind: 3)."""
+
+    def __init__(self, field, st, rs):
         self.key = field.key
         self.field = field
-        self.heading = st.get("heading") or field.label
+        self.dim = field.dim
+        if self.dim:
+            p_unit, p_dec = project_default(rs, self.dim)
+            self.unit = st.get("unit") or p_unit
+            self.decimals = st["decimals"] if st.get("decimals") is not None else p_dec
+        else:
+            self.unit = None
+            if st.get("decimals") is not None:
+                self.decimals = st["decimals"]
+            else:
+                self.decimals = 3 if field.kind == "number" else None
+        self.prefix = self.unit if self.dim == "currency" else u""
+        name = st.get("heading") or field.label
+        self.heading = name + (u" (%s)" % st["tag"] if st.get("tag") else u"") + U.heading_suffix(self.dim, self.unit)
         self.align = st.get("align") or "left"
-        self.orientation = st.get("orientation") or "horizontal"
         self.width_mm = st.get("widthMm")
         self.hidden_in_revit = bool(st.get("hiddenInRevit"))
         self.show_in_excel = st.get("showInExcel", True)
         self.calc = st.get("calc") or "none"
-        dec = st.get("decimals")
-        if dec is None and field.kind in ("length", "area", "volume") and unit_decimals:
-            dec = unit_decimals.get(field.kind)
-        if dec is None:
-            dec = _KEY_DECIMALS.get(field.key, _KIND_DECIMALS.get(field.kind))
-        self.decimals = dec
 
 
 class Row(object):
     def __init__(self, kind, cells, gid=0, lorder=0, els=None, label=None, members=None):
         self.kind = kind
-        self.cells = cells          # field key -> value (None = empty)
-        self.gid = gid              # group (or element, when itemized) sequence number
-        self.lorder = lorder        # layer order, the last implicit sort key
-        self.els = els or []        # ElementRecords behind this row (data rows)
-        self.label = label          # text for total/min/max rows, and the value of a header row
-        self.members = members or []  # data rows that a footer adds up
+        self.cells = cells          # field key -> base-unit value (None = empty)
+        self.gid = gid
+        self.lorder = lorder
+        self.els = els or []
+        self.label = label
+        self.members = members or []
 
 
 class Table(object):
     def __init__(self, title, columns, blocks, appearance=None):
         self.title = title
         self.columns = columns
-        self.blocks = blocks                       # list of lists of Row
+        self.blocks = blocks                       # list of lists of Row, base units
         self.appearance = appearance or AP.preset("bw")
 
     def select(self, keep):
@@ -194,9 +224,10 @@ class Table(object):
         return [AP.apply_case(c.heading, mode) for c in self.columns]
 
     def _line(self, r):
+        """One output row. The only place base values become display values."""
         n = len(self.columns)
         app = self.appearance
-        if r.kind in (ROW_HEADER, ROW_SUMHEAD):   # full-row text, always in the first cell
+        if r.kind in (ROW_HEADER, ROW_SUMHEAD):
             line = [u""] * n
             line[0] = AP.apply_case(r.label or u"", AP.case_of(app, _KIND_EL[r.kind]))
             return line
@@ -206,6 +237,8 @@ class Table(object):
             v = r.cells.get(c.key)
             if v is None:
                 v = u""
+            elif c.dim and _is_num(v):
+                v = U.to_display(v, c.dim, c.unit)
             elif AP.is_text(v) and v not in _MARKERS:
                 v = AP.apply_case(v, mode)
             line.append(v)
@@ -229,7 +262,7 @@ class Table(object):
                 m.append(line)
         return m
 
-    
+
 class Result(object):
     def __init__(self, table, warnings):
         self.table = table                                              # every selected column
@@ -249,7 +282,7 @@ def _s(v):
 
 
 def sort_value(v):
-    """Empty first, numbers in numeric order, text case-insensitive (same as v1).
+    """Empty first, numbers in numeric order, text case-insensitive.
     Formula values: NONE sorts with the empty cells, TRUE after FALSE, errors last."""
     if v is EV.NONE:
         return (0, 0, u"")
@@ -288,11 +321,21 @@ def _sum(vals):
     nums = [v for v in vals if _is_num(v)]
     return sum(nums) if nums else None
 
-def _fmt(v, dec):
-    return (u"%.*f" % (dec, v)) if dec is not None else format(v, ".15g")
+
+def _disp(v, col):
+    """Base value -> display value for a column (numbers of dimensioned columns only)."""
+    if col is not None and col.dim and _is_num(v):
+        return U.to_display(v, col.dim, col.unit)
+    return v
 
 
-def _row_calc_value(els, key, mode, dec):
+def _show(v, col):
+    """Display text of one number in a column, with its decimals (used for range text)."""
+    return U.format_text(_disp(v, col), col.decimals if col is not None else None,
+                         col.prefix if col is not None else u"")
+
+
+def _row_calc_value(els, key, mode, col):
     """The one value a merged cell shows when its column has a calculation."""
     nums = [v for v in (e.get(key) for e in els) if _is_num(v)]
     if not nums:
@@ -306,7 +349,8 @@ def _row_calc_value(els, key, mode, dec):
     lo, hi = min(nums), max(nums)                  # minmax
     if abs(hi - lo) < 1e-9:
         return lo
-    return u"%s \u2013 %s" % (_fmt(lo, dec), _fmt(hi, dec))
+    return u"%s \u2013 %s" % (_show(lo, col), _show(hi, col))
+
 
 # --------------------------------------------------------------------------------------------- stage 1
 def select_columns(rs, settings, ttype=None):
@@ -322,11 +366,11 @@ def select_columns(rs, settings, ttype=None):
         if f.scope == "layer" and ttype != "takeoff":
             warns.append(u"'%s' is a layer field, only available in a Material takeoff: skipped." % f.label)
             continue
-        cols.append(ColumnSpec(f, _fill(st), rs.unit_decimals))
+        cols.append(ColumnSpec(f, _fill(st), rs))
     if settings.get("itemize") and not any(c.key == K_ELEMENT_ID for c in cols):
         f = rs.field(K_ELEMENT_ID)
         if f is not None:
-            cols.insert(0, ColumnSpec(f, field_setting(K_ELEMENT_ID)))
+            cols.insert(0, ColumnSpec(f, field_setting(K_ELEMENT_ID), rs))
     if not cols:
         raise ValueError("No fields selected.")
     return cols, warns
@@ -339,10 +383,6 @@ def _fill(st):
 
 
 # --------------------------------------------------------------------------------------------- stage 2
-def _sv(v):
-    return round(v, 3) if isinstance(v, float) else v
-
-
 def _group_key(rs, e, itemize, idx, split):
     if itemize:
         return idx
@@ -353,8 +393,8 @@ def _group_key(rs, e, itemize, idx, split):
         wh = (None, None)
     else:
         wh = (_r3(e.get(K_WIDTH)), _r3(e.get(K_HEIGHT)))
-    # instance fields used as a group level split the rows (no "Varies" inside a group)
-    return (e.type_id, e.get(K_LEVEL), wh[0], wh[1]) + tuple(_sv(e.get(k)) for k in split)
+    return (e.type_id, e.get(K_LEVEL), wh[0], wh[1]) + tuple(_r3(e.get(k)) if _is_num(e.get(k)) else e.get(k)
+                                                              for k in split)
 
 
 def build_rows(rs, settings, keys, ttype, labels, split=()):
@@ -390,9 +430,9 @@ def build_rows(rs, settings, keys, ttype, labels, split=()):
                 elif key == K_LEVEL:
                     cells[key] = ges[0].get(K_LEVEL) or None
                 elif key == K_WIDTH and not itemize and not tr.is_curtain and not tr.is_layered:
-                    cells[key] = _r3(ges[0].get(K_WIDTH))
+                    cells[key] = ges[0].get(K_WIDTH)
                 elif key == K_HEIGHT and not itemize and (tr.is_curtain or not tr.is_layered):
-                    cells[key] = _r3(ges[0].get(K_HEIGHT))
+                    cells[key] = ges[0].get(K_HEIGHT)
             rows.append(Row(ROW_DATA, cells, gid, lay.order if lay is not None else 0, ges))
     return rows, expanded
 
@@ -419,17 +459,16 @@ def _layer_cell(key, lay, ges, labels):
 def apply_varies(rs, rows, keys, itemize, labels, cols):
     """Element-scope values left open by stage 2. A column with a calculation shows the calculated value
     of its elements; otherwise one value per row, or 'Varies' when the elements differ."""
-    calc = dict((c.key, c.calc) for c in cols)
-    dec = dict((c.key, c.decimals) for c in cols)
+    colmap = dict((c.key, c) for c in cols)
     todo = [k for k in keys if rs.field(k) is not None and rs.field(k).scope == "element"]
     cache = {}
     for r in rows:
         for k in todo:
-            mode = calc.get(k, "none")
+            mode = colmap[k].calc if k in colmap else "none"
             if mode != "none":
                 ck = (r.gid, k, mode)
                 if ck not in cache:
-                    cache[ck] = _row_calc_value(r.els, k, mode, dec.get(k))
+                    cache[ck] = _row_calc_value(r.els, k, mode, colmap.get(k))
                 r.cells[k] = cache[ck]
             elif k not in r.cells:
                 ck = (r.gid, k)
@@ -442,8 +481,8 @@ def apply_varies(rs, rows, keys, itemize, labels, cols):
 
 # --------------------------------------------------------------------------------------------- stage 4
 def _gap_sig(r, key):
-    """Value that decides a new block. A blank Type Mark counts as 'this type' (v1: types without a mark
-    are separated by name), a shared Type Mark keeps its types in one block."""
+    """Value that decides a new block. A blank Type Mark counts as its own type (v1: types without a mark
+    are separated by name); a shared Type Mark keeps its types in one block."""
     v = r.cells.get(key)
     if key == K_TYPE_MARK and (v is None or v == u"") and r.els:
         return ("type", r.els[0].type_id)
@@ -482,9 +521,15 @@ def _header_text(r, lv, cols=()):
     v = r.cells.get(lv["key"])
     if v is EV.NONE or isinstance(v, (EV.Err, bool)):
         return EV.to_cell(v)
-    if isinstance(v, float):                      # same rounding as the cells of that column show
-        dec = [c.decimals for c in cols if c.key == lv["key"]]
-        return u"%s" % format(round(v, dec[0]) if dec and dec[0] is not None else v, ".15g")
+    col = None
+    for c in cols:
+        if c.key == lv["key"]:
+            col = c
+            break
+    if col is not None and col.dim and _is_num(v):
+        return U.format_text(_disp(v, col), col.decimals, col.prefix)
+    if isinstance(v, float):
+        return u"%s" % format(v, ".15g")
     return u"(none)" if v is None or v == u"" else u"%s" % v
 
 
@@ -492,6 +537,16 @@ def _footer(seg, cols, labels, mode):
     out = _calc_rows(seg, cols, False, labels, override=mode)
     for x in out:
         x.members = seg
+    return out
+
+
+def _collapse_gaps(items):
+    """Two gap rows in a row (a child gap and its parent's gap at the same boundary) become one."""
+    out = []
+    for r in items:
+        if r.kind == ROW_BLANK and out and out[-1].kind == ROW_BLANK:
+            continue
+        out.append(r)
     return out
 
 
@@ -511,7 +566,6 @@ def _seg_items(seg, levels, i, cols, labels):
     if lv.get("gap"):
         out.append(Row(ROW_BLANK, {}))
     return out
-
 
 
 # --------------------------------------------------------------------------------------------- stage 5
@@ -537,8 +591,8 @@ def _values_for(rows, c):
 
 
 def _calc_rows(rows, cols, grand, labels, override=None):
-    """Total / min / max rows for `rows`. override: footer mode of one level (None or 'field' = each
-    field's own Calculation)."""
+    """Total / min / max rows for `rows`, in base units. override: footer mode of one level
+    (None or 'field' = each field's own Calculation)."""
     sums, mins, maxs = {}, {}, {}
     for c in cols:
         mode = c.calc if override in (None, "field") else override
@@ -558,13 +612,8 @@ def _calc_rows(rows, cols, grand, labels, override=None):
             (mins, ROW_GMIN if grand else ROW_MIN, "min"),
             (maxs, ROW_GMAX if grand else ROW_MAX, "max"))
     for cells, kind, name in spec:
-        if not cells:
-            continue
-        if grand:
-            label = labels[name]
-        else:
-            label = labels[name]
-        out.append(Row(kind, cells, label=label))
+        if cells:
+            out.append(Row(kind, cells, label=labels[name]))
     return out
 
 
@@ -574,7 +623,8 @@ def build_blocks(rows, levels, cols, labels, itemize, expanded, grand):
         levels.insert(0, {"key": None, "_gid": True, "header": False, "footer": False, "gap": False})
     rows = _sort_rows(rows, levels)
     if levels:
-        blocks = [_seg_items(seg, levels, 0, cols, labels) for seg in _segments(rows, levels[0])]
+        blocks = [_collapse_gaps(_seg_items(seg, levels, 0, cols, labels))
+                  for seg in _segments(rows, levels[0])]
     else:
         blocks = [list(rows)] if rows else []
     if blocks and blocks[-1] and blocks[-1][-1].kind == ROW_BLANK:    # no gap after the last block
@@ -589,22 +639,19 @@ def build_blocks(rows, levels, cols, labels, itemize, expanded, grand):
             blocks.append([Row(ROW_SUMHEAD, {}, label=labels["summary"])] + g)
     return blocks
 
+
 # --------------------------------------------------------------------------------------------- stage 6
-def format_cells(blocks, cols):
-    dec = dict((c.key, c.decimals) for c in cols)
+def format_cells(blocks):
+    """Formula markers only. Numbers stay at full precision: rounding and units happen at output."""
     for b in blocks:
         for r in b:
             for k, v in list(r.cells.items()):
                 if v is EV.NONE or isinstance(v, (EV.Err, bool)):
-                    r.cells[k] = EV.to_cell(v)            # #NONE #ERROR #TRUE #FALSE, only now: footers and sorting needed the raw value
-                    continue
-                d = dec.get(k)
-                if d is not None and isinstance(v, float):
-                    r.cells[k] = round(v, d)
+                    r.cells[k] = EV.to_cell(v)
     return blocks
 
 
-# ------------------------------------------------------------------------------------ custom fields (Phase 6)
+# ------------------------------------------------------------------------------------ custom fields
 class Custom(object):
     """One custom (formula) field of the table settings, parsed and checked."""
 
@@ -630,32 +677,21 @@ def _walk_fields(node, out):
     for child in getattr(node, u"args", None) or []:
         _walk_fields(child, out)
 
-def field_kind(ty):
-    """Checked result type -> (field kind, unit text). Matches the kinds the records use."""
-    if ty.kind == u"text":
-        return u"text", None
-    if ty.kind == u"bool":
-        return u"yesno", None
-    if ty.exp == 0:
-        return (u"integer" if ty.count else u"number"), None
-    kind = {1: u"length", 2: u"area", 3: u"volume"}.get(ty.exp, u"number")
-    return kind, FM.unit_text(ty)
 
 def attach_custom(rs, settings):
     """Put the custom fields of settings["custom"] into the catalogue, with the type of their formula.
 
     Definitions: {"key": u"calc:1", "name": u"Wall volume", "formula": u"{@AREA} * {@HEIGHT}"}, formula in
-    stored form (keys between braces). Safe to call on every rebuild: fields no longer defined are removed,
-    the others are replaced in place.
+    stored form. Safe to call on every rebuild. The dimension (length, area, volume or none) comes from the
+    formula's result kind, through Field, so the Formatting tab offers units only where they apply.
 
     Returns (customs {key: Custom}, order [keys, dependencies first], warnings).
-    A formula that cannot be calculated (syntax, unit or type error, circular reference) is kept as a text
-    field whose cells show #ERROR, so the table still builds.
+    A formula that cannot be calculated is kept as a text field whose cells show #ERROR.
     """
     defs = {}
     for d in settings.get("custom") or []:
         if isinstance(d, dict) and d.get("key"):
-            defs[d["key"]] = d                          # last definition of a key wins
+            defs[d["key"]] = d
 
     for f in list(rs.fields):
         if f.scope == "formula" and f.key not in defs:
@@ -670,7 +706,7 @@ def attach_custom(rs, settings):
             _walk_fields(c.ast, c.names)
         except FM.FormulaError as ex:
             c.broken, c.reason = ex.message, ex.reason
-        c.deps = set(n for n in c.names if n in defs)  # all defined keys, not only those seen so far
+        c.deps = set(n for n in c.names if n in defs)
         customs[key] = c
 
     # 2. order the fields; a circular reference breaks only the fields in the loop
@@ -702,9 +738,9 @@ def attach_custom(rs, settings):
 
         if c.broken is not None:
             warns.append(u"Custom field '%s' cannot be calculated: %s" % (c.name, c.broken))
-            kind, unit, result = u"text", None, None
+            kind, result = u"text", None
         else:
-            kind, unit = field_kind(c.ty)
+            kind, _unit_text = FM.field_kind(c.ty)
             result = (c.ty.kind, c.ty.exp, c.ty.count)
 
         c.per_row = any(
@@ -712,7 +748,7 @@ def attach_custom(rs, settings):
             (r in customs and customs[r].per_row)
             for r in c.refs)
 
-        f = Field(key, c.name, "formula", kind, unit, result=result, formula=c.text)
+        f = Field(key, c.name, "formula", kind, result=result, formula=c.text)
         f.per_row = c.per_row
         rs.replace_field(f)
 
@@ -732,22 +768,16 @@ def _needed(cols, customs):
 
 
 def apply_formulas(rs, rows, customs, order, labels):
-    """Stage 3b: evaluate the custom fields for every row, in dependency order. A formula reads the row's cells,
-    so it sees the group's Count, the summed Area and so on. Values stay raw (float, text, True/False, NONE or
-    an Err); format_cells turns them into #NONE / #ERROR / #TRUE / #FALSE after sorting and footers.
-    A 'Varies' (or 'min - max') cell has no single value: the formula reads it as NONE.
-    Returns warnings."""
+    """Stage 3b: evaluate the custom fields for every row, in dependency order, in base units.
+    A 'Varies' (or range) cell has no single value: the formula reads it as NONE.
+    Broken formulas are reported once, by attach_custom. Returns warnings for row errors only."""
     warns = []
     if not order:
         return warns
     kinds = dict((f.key, f.kind) for f in rs.fields)
     scopes = dict((f.key, f.scope) for f in rs.fields)
     varies = labels["varies"]
-    numeric = ("number", "integer", "length", "area", "volume")
     stats = dict((k, {"n": 0, "err": 0, "reasons": {}, "example": None}) for k in order)
-    for k in order:
-        if customs[k].broken:
-            warns.append(u"Custom field '%s' cannot be calculated: %s" % (customs[k].name, customs[k].broken))
     for r in rows:
         cells = r.cells
 
@@ -755,7 +785,8 @@ def apply_formulas(rs, rows, customs, order, labels):
             if key not in cells:
                 raise KeyError(key)                        # not a field of the table: #ERROR, reason ref
             v = cells[key]
-            if isinstance(v, _STR) and (kinds.get(key) in numeric or (scopes.get(key) == "element" and v == varies)):
+            if isinstance(v, _STR) and (kinds.get(key) in NUMERIC_KINDS or
+                                        (scopes.get(key) == "element" and v == varies)):
                 return None
             return v
 
@@ -781,7 +812,7 @@ def apply_formulas(rs, rows, customs, order, labels):
     return warns
 
 
-# ------------------------------------------------------------------------------------------ the pipeline
+# ------------------------------------------------------------------------------------ the pipeline
 def _levels(rs, items, ttype, what, warns, allowed):
     out = []
     for s in items:
@@ -798,6 +829,7 @@ def _levels(rs, items, ttype, what, warns, allowed):
 
 
 def build_table(rs, settings):
+    check_calc_modes(settings)
     labels = dict(DEFAULT_LABELS)
     labels.update(settings.get("labels") or {})
     itemize = bool(settings.get("itemize"))
@@ -815,7 +847,7 @@ def build_table(rs, settings):
     need = _needed(cols, customs)
     f_order = [k for k in c_order if k in need]
     listed = set(st["key"] for st in settings.get("fields", []))
-    for k in f_order:                                     # fields a formula reads must be in the cells, shown or not
+    for k in f_order:                                     # fields a formula reads must be in the cells
         for ref in sorted(customs[k].refs):
             f = rs.field(ref)
             if (ref in listed and ref not in keys and f is not None and f.scope != "formula"
@@ -828,7 +860,7 @@ def build_table(rs, settings):
     warns = warns + c_warns + apply_formulas(rs, rows, customs, f_order, labels)
     rows = filters.apply_row_filters(rs, rows, settings.get("filter"), set(c.key for c in cols))
     blocks = build_blocks(rows, levels, cols, labels, itemize, expanded, bool(settings.get("grandTotals")))
-    blocks = format_cells(blocks, cols)
+    blocks = format_cells(blocks)
 
     if itemize and expanded and len(rows) > 500:
         warns.append(u"Itemized layered table: %d rows." % len(rows))

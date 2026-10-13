@@ -225,9 +225,10 @@ class FilterTab(object):
 
 
     def values_for(self, label):
-        """Distinct values of a field across the model, for the Value suggestions."""
+        """Distinct values of a model field across the model, for the Value suggestions."""
         key = self.key_of(label)
-        if not key or self._rs is None:
+        f = self._fields.get(label)
+        if not key or self._rs is None or f is None or f.scope not in ("element", "type"):
             return _net([])
         if key not in self._value_cache:
             seen = set()
