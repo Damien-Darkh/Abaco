@@ -5,6 +5,10 @@
   read_category(doc, category, log)   one pass over the model: core values + field catalogue
   ensure_values(doc, rs, keys, log)   fill in values of extra catalogue fields on demand (cached)
 
+Project units: read_category() sets rs.project = {dim: (unit label, decimals)} from Revit's Project Units.
+A dimension whose unit is not in units.DIMENSIONS (feet, inches) is left out, so the pipeline falls back
+to units.DEFAULT_UNIT for it.
+
 Why on demand: reading every parameter of every element is slow on big models. The catalogue (names, kinds,
 scopes) is cheap and complete; the values of a field are read the first time the user uses it.
 
@@ -17,10 +21,10 @@ clr.AddReference("RevitAPI")
 import Autodesk.Revit.DB as DB
 from System import Guid
 
+from abaco import units as U
 from abaco.records import (
     Field, Layer, TypeRecord, ElementRecord, RecordSet, core_fields,
     K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID)
-from abaco.units import M2
 
 try:
     _long = long            # IronPython 2.7: a long binds to ElementId(Int64)
@@ -38,8 +42,7 @@ _WIDTH_NAMES = ["WINDOW_WIDTH", "DOOR_WIDTH", "FAMILY_WIDTH_PARAM", "Width"]
 _HEIGHT_NAMES = ["WINDOW_HEIGHT", "DOOR_HEIGHT", "FAMILY_HEIGHT_PARAM", "WALL_USER_HEIGHT_PARAM", "Height"]
 _CURTAIN_HEIGHT_NAMES = ["WALL_USER_HEIGHT_PARAM"]
 
-_UNITS = {"length": u"m", "area": M2, "volume": u"m\u00b3"}
-
+# (dimension, ForgeTypeId spec, ForgeTypeId base unit of that dimension)
 _SPECS = (("length", DB.SpecTypeId.Length, DB.UnitTypeId.Meters),
           ("area", DB.SpecTypeId.Area, DB.UnitTypeId.SquareMeters),
           ("volume", DB.SpecTypeId.Volume, DB.UnitTypeId.CubicMeters))
@@ -308,8 +311,8 @@ def _material_areas(el, tr):
         out[mid] = convert(a, "area")
     return out
 
-# ------------------------------------------------------------------------------------------- decimals
 
+# ------------------------------------------------------------------------------------------- decimals
 def _decimals_of(acc):
     """Accuracy 0.001 -> 3, 0.01 -> 2, 1 -> 0. A non-decimal accuracy rounds up to the digits it needs."""
     if not acc or acc <= 0:
@@ -321,24 +324,31 @@ def _decimals_of(acc):
     return d
 
 
-def project_decimals(doc):
-    """Rounding of the project's units, as decimal places of the metre / m2 / m3 values we write.
-    Revit's Accuracy is in the project's display unit, so it is converted to metres first."""
+def project_units(doc):
+    """{dim: (unit label, decimals)} from Revit's Project Units, for length, area and volume.
+
+    per_base is how many of the project unit make one base unit (1 m -> 1000 in mm), the number that
+    units.match_unit() expects. A unit that is not in units.DIMENSIONS is left out, so that dimension falls
+    back to units.DEFAULT_UNIT. Accuracy is converted to the base unit before counting decimals.
+    """
     out = {}
     try:
         fmt = doc.GetUnits()
     except Exception:
         return out
-    for kind, spec, target in _SPECS:
+    for dim, spec, target in _SPECS:
         try:
             fo = fmt.GetFormatOptions(spec)
             unit = fo.GetUnitTypeId()
+            per_base = DB.UnitUtils.ConvertFromInternalUnits(
+                DB.UnitUtils.ConvertToInternalUnits(1.0, target), unit)
+            label = U.match_unit(dim, per_base)
+            if label is None:
+                continue
             acc = float(fo.Accuracy)
-            acc_target = DB.UnitUtils.ConvertFromInternalUnits(
+            acc_base = DB.UnitUtils.ConvertFromInternalUnits(
                 DB.UnitUtils.ConvertToInternalUnits(acc, unit), target)
-            d = _decimals_of(acc_target)
-            if d is not None:
-                out[kind] = d
+            out[dim] = (label, _decimals_of(acc_base))
         except Exception:
             continue
     return out
@@ -364,7 +374,8 @@ def _scan_params(obj, scope, rs):
                 group = DB.LabelUtils.GetLabelForGroup(p.Definition.GetGroupTypeId()) or None
             except Exception:
                 pass
-            rs.add_field(Field(key, label, scope, kind, _UNITS.get(kind), group=group))
+            # the dimension comes from the kind; the unit comes from rs.project (see pipeline.project_default)
+            rs.add_field(Field(key, label, scope, kind, group=group))
         except Exception:
             continue
 
@@ -375,7 +386,7 @@ def read_category(doc, category, log=None):
     log = log or (lambda m: None)
     is_walls = eid_val(category.Id) == int(DB.BuiltInCategory.OST_Walls)
     rs = RecordSet(eid_val(category.Id), category.Name)
-    rs.unit_decimals = project_decimals(doc)
+    rs.project = project_units(doc)
     for f in core_fields(is_walls):
         rs.add_field(f)
         rs.loaded_keys.add(f.key)
