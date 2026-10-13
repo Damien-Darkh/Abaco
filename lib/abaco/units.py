@@ -14,6 +14,7 @@ except NameError:
     _STR = (str,)
 
 TOL = 1e-6
+
 M2 = u"m\u00b2"
 
 # dimension -> [(unit label, units per base unit)]
@@ -28,10 +29,10 @@ DIMENSIONS = {
 }
 
 # unit that stored values are in
-BASE_UNIT = {"length": u"m", "area": u"m\u00b2", "volume": u"m\u00b3", "angle": u"rad", "currency": None}
+BASE_UNIT = {"length": u"m", "area": M2, "volume": u"m\u00b3", "angle": u"rad", "currency": None}
 
 # fallback when Revit's project units cannot be read or are not in the list
-DEFAULT_UNIT = {"length": u"m", "area": u"m\u00b2", "volume": u"m\u00b3", "angle": u"\u00b0", "currency": u"$"}
+DEFAULT_UNIT = {"length": u"m", "area": M2, "volume": u"m\u00b3", "angle": u"\u00b0", "currency": u"$"}
 DEFAULT_DECIMALS = {"length": 3, "area": 2, "volume": 3, "angle": 0, "currency": 2}
 
 # decimal choices, with the example shown in the drop-down
