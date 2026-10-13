@@ -2,10 +2,12 @@
 """pipeline Table -> sheet model for the Excel writer. Pure Python, testable without Excel.
 
 Excel rows are 1-based: row 1 title, row 2 headings, then the table rows.
-Footers and summary rows get SUBTOTAL formulas. A formula is only written when it gives the same
-answer as the Python value: never for a layer footer on an expanded table, never over text cells.
+Numbers stay numbers. The display is the number format from units.excel_format(), so Excel shows
+exactly what the Revit drawing and the preview show (units.format_text), and formulas keep working.
+Footers and summary rows get SUBTOTAL formulas, only where they give the same answer as the Python value.
 """
 from abaco import appearance as AP
+from abaco import units as U
 from abaco.pipeline import (ROW_DATA, ROW_BLANK, ROW_HEADER, ROW_SUMHEAD, ROW_TOTAL, ROW_MIN, ROW_MAX,
                             ROW_GTOTAL, ROW_GMIN, ROW_GMAX)
 
@@ -37,7 +39,9 @@ class Sheet(object):
         self.ncols = 0
         self.aligns = []
         self.vertical = []
-        self.numfmts = []
+        self.decimals = []          # per column: decimal places, or None (General)
+        self.prefixes = []          # per column: currency symbol, or u""
+        self.numfmts = []           # per column: Excel number format (units.excel_format)
         self.widths = []            # fixed column width in mm, or None
         self.row_el = []            # per Excel row: appearance element name, None for blank rows
         self.merged_rows = []       # rows whose text runs across the table
@@ -72,8 +76,9 @@ def build_sheet(table):
     vert = app["elements"]["heading"].get("orientation") == "vertical"
     sh.vertical = [vert] * n
     sh.widths = [c.width_mm for c in cols]
-    sh.numfmts = [(u"0." + u"0" * c.decimals if c.decimals else u"0") if c.decimals is not None else u"General"
-                  for c in cols]
+    sh.decimals = [c.decimals for c in cols]
+    sh.prefixes = [c.prefix or u"" for c in cols]
+    sh.numfmts = [U.excel_format(c.decimals, c.prefix) for c in cols]
 
     title = AP.apply_case(table.title, AP.case_of(app, "title"))
     sh.values.append([title] + [u""] * (n - 1))

@@ -23,6 +23,7 @@ Common-subset Python (IronPython 2.7 / 3.4 / CPython 3): no f-strings.
 import re
 
 from abaco import evaluate as EV
+from abaco import units as U
 
 MATCH_ALL = "all"
 MATCH_ANY = "any"
@@ -311,6 +312,27 @@ def apply_row_filters(rs, rows, settings, allowed=None):
         if (all(res) if match_all else any(res)):
             kept.append(r)
     return kept
+
+
+def suggestion_text(value, kind, decimals=None):
+    """Text offered in the Value suggestions for a model value.
+
+    Numbers use units.format_text with the field's decimals and no currency symbol, so the text reads back
+    through parse_number(). The value is in base units (m, m2, m3, rad), the same units the condition
+    compares in, so a suggestion never needs converting.
+    """
+    if value is None or value == u"":
+        return u""
+    if kind in NUMERIC_KINDS and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return U.format_text(float(value), decimals)
+    return u"%s" % value
+
+
+def value_unit(field):
+    """Unit a numeric condition is typed in, for the Value hint: 'm' for a length, '' when none."""
+    if field is None or field.dim is None:
+        return u""
+    return U.BASE_UNIT.get(field.dim) or u""
 
 
 def filtered_view(rs, kept):

@@ -67,16 +67,25 @@ def setup(rs, defs, table_type="schedule", extra_fields=(), **kw):
     return s
 
 
+def _head_index(heads, name):
+    """Column index of a heading. Matches the bare name or the name with its unit, e.g. 'Ratio' or 'Ratio (m²)'."""
+    for i, h in enumerate(heads):
+        if h == name or h.startswith(name + u" ("):
+            return i
+    raise ValueError(u"no column named %s in %s" % (name, heads))
+
+
 def column(res, heading):
-    """Values of one column over the data rows (blank spacer and footer rows left out)."""
+    """Values of one column over the data rows (blank spacer and footer rows left out).
+    Floats are rounded to 9 places so 0.9 * 2.1 compares equal to 1.89. Display rounding is tested elsewhere."""
     m = res.table.to_matrix()
-    i = m[1].index(heading)
+    i = _head_index(m[1], heading)
     rows = [r for blk in res.table.blocks for r in blk if r.kind == "data"]
     lines = [dict(zip([c.key for c in res.table.columns], ln)) for ln in
              [l for blk in res.table.rendered_blocks() for k, l in blk if k == "data"]]
     assert len(rows) == len(lines)
     key = [c.key for c in res.table.columns][i]
-    return [ln[key] for ln in lines]
+    return [round(ln[key], 9) if isinstance(ln[key], float) else ln[key] for ln in lines]
 
 
 def build(rs, s):
@@ -89,7 +98,8 @@ def test_attach_adds_typed_fields_and_replaces_in_place():
     s = setup(rs, [custom(u"calc:1", u"Door Area", u"{@WIDTH} * {@HEIGHT}")])
     customs, order, warns = P.attach_custom(rs, s)
     f = rs.field(u"calc:1")
-    assert f.scope == "formula" and f.kind == "area" and f.unit == u"m\u00b2" and f.result == ("num", 2, False)
+    assert f.scope == "formula" and f.kind == "area" and f.dim == "area"
+    assert f.base_unit == u"m\u00b2" and f.result == ("num", 2, False)
     assert order == [u"calc:1"] and warns == [] and customs[u"calc:1"].broken is None
     pos = rs.fields.index(f)
     s["custom"][0]["formula"] = u"{@WIDTH}"                  # edited: now a length
@@ -109,7 +119,7 @@ def test_result_kinds_for_every_type():
     P.attach_custom(rs, s)
     for i, (t, k) in enumerate(cases):
         assert rs.field(u"c%d" % i).kind == k, (t, rs.field(u"c%d" % i).kind)
-    assert rs.field(u"c5").unit == u"m^4"                    # no kind of its own: a number with the unit as text
+    assert rs.field(u"c5").kind == "number" and rs.field(u"c5").dim is None                    # no kind of its own: a number with the unit as text
 
 
 def test_display_labels_keep_a_clashing_name_apart():
@@ -119,6 +129,17 @@ def test_display_labels_keep_a_clashing_name_apart():
     labs = rs.display_labels()
     assert labs[u"calc:1"] != labs[u"@FAMILY"] and u"custom" in labs[u"calc:1"]
 
+
+def test_custom_heading_carries_formula_unit():
+    rs = doors()
+    s = setup(rs, [custom(u"calc:1", u"Door Area", u"{@WIDTH} * {@HEIGHT}")])
+    assert u"Door Area (m\u00b2)" in build(rs, s).table.headings()
+
+def test_custom_heading_ignores_project_unit():
+    rs = doors()
+    rs.project = {"area": (u"cm\u00b2", 0)}      # project shows areas in cm2
+    s = setup(rs, [custom(u"calc:1", u"Door Area", u"{@WIDTH} * {@HEIGHT}")])
+    assert u"Door Area (m\u00b2)" in build(rs, s).table.headings()
 
 # ---------------------------------------------------------------------------- per-row evaluation
 def test_formula_sees_the_row_not_the_element():
@@ -132,7 +153,9 @@ def test_group_count_and_summed_area_are_row_values():
     s = setup(rs, [custom(u"calc:1", u"Average", u"{@AREA} / {@COUNT}")],
               extra_fields=[P.field_setting(K_AREA, include=False)])           # in the field list, not shown
     res = build(rs, s)
-    assert [c.heading for c in res.table.columns][-1] == u"Average" and u"Area (m\u00b2)" not in [c.heading for c in res.table.columns]
+    heads = [c.heading for c in res.table.columns]
+    assert heads[-1] == u"Average (m\u00b2)"          # dimensioned formula: the unit is in the heading
+    assert u"Area (m\u00b2)" not in heads             # the summed area is in the field list only, not shown
     assert column(res, u"Average") == [1.89, 2.1, 2.2, 1.89]                   # D1/L0: 3.78 / 2
     s["custom"][0]["formula"] = u"{@AREA} * 2"
     assert column(build(rs, s), u"Average")[0] == 7.56                         # doubles the group's SUM
@@ -144,7 +167,10 @@ def test_chain_of_custom_fields_in_any_order_and_unlisted_middle_field():
             custom(u"calc:1", u"Door Area", u"{@WIDTH} * {@HEIGHT}")]
     s = setup(rs, defs)
     s["fields"] = [f for f in s["fields"] if f["key"] != u"calc:1"]            # only Per Leaf is a column
-    assert column(build(rs, s), u"Per Leaf") == [0.95, 2.1, 2.2, 1.89]         # 1.89/2 = 0.945, shown with 2 decimals
+    res = build(rs, s)
+    # Per Leaf is an area, so its heading carries the area unit
+    vals = [round(v, 3) for v in column(res, u"Per Leaf (m\u00b2)")]
+    assert vals == [0.945, 2.1, 2.2, 1.89]     # 1.89 / 2, 2.1 / 1, 2.2 / 1, 1.89 / 1
 
 
 def test_none_input_gives_none_and_shows_the_marker():
@@ -189,7 +215,7 @@ def test_circular_reference_breaks_only_the_loop():
             custom(u"calc:3", u"Fine", u"{@WIDTH} * 2")]
     res = build(rs, setup(rs, defs))
     assert set(column(res, u"A Field") + column(res, u"B Field")) == set([u"#ERROR"])
-    assert column(res, u"Fine") == [1.8, 2.0, 2.0, 1.8]
+    assert column(res, u"Fine (m)") == [1.8, 2.0, 2.0, 1.8]
     assert any(u"circular reference" in w and u"A Field" in w for w in res.warnings), res.warnings
 
 
@@ -248,7 +274,7 @@ def test_block_header_of_a_custom_level_uses_the_marker():
     s = setup(rs, [custom(u"calc:1", u"Door Area", u"{@WIDTH} * {@HEIGHT}")],
               levels=[P.sort_setting(u"calc:1", header=True, gap=True)])
     heads = [r.label for blk in build(rs, s).table.blocks for r in blk if r.kind == "header"]
-    assert heads == [u"#NONE", u"1.89", u"2.1"], heads            # 0.9 * 2.1 = 1.8900000000000001 is shown as the cells show it
+    assert heads == [u"#NONE", u"1.89", u"2.10"], heads   # headers use the column's decimals, like the cells
 
 
 def test_footer_totals_skip_markers():

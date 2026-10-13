@@ -14,6 +14,7 @@ except NameError:
     _STR = (str,)
 
 TOL = 1e-6
+M2 = u"m\u00b2"
 
 # dimension -> [(unit label, units per base unit)]
 DIMENSIONS = {

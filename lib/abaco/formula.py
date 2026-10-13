@@ -124,8 +124,8 @@ def ty_of_field(kind):
 
 
 def field_kind(ty):
-    """Field kind and unit label for a checked result type (custom fields in the catalogue).
-    A unit exponent outside 1 to 3 has no kind of its own: it is a number with the unit shown as text."""
+    """Field kind and base unit label for a checked result type. Units are base units (m, m2, m3),
+    so the label of a dimensioned result is its base unit; None when there is no dimension."""
     if ty.kind == u"text":
         return u"text", None
     if ty.kind == u"bool":
@@ -133,7 +133,7 @@ def field_kind(ty):
     if ty.exp == 0:
         return (u"integer" if ty.count else u"number"), None
     known = {1: (u"length", u"m"), 2: (u"area", u"m\u00b2"), 3: (u"volume", u"m\u00b3")}
-    return known.get(ty.exp) or (u"number", unit_text(ty))
+    return known.get(ty.exp) or (u"number", None)
 
 
 # ---------------------------------------------------------------------------------------- tokenizer

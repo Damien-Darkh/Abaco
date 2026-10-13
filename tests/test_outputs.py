@@ -18,11 +18,13 @@ from abaco.sheet import build_sheet
 from test_pipeline import walls, doors, settings, fs, only
 from abaco import measure as M
 from abaco import appearance as AP
+from abaco.records import Field, RecordSet, TypeRecord, ElementRecord, core_fields
+from abaco.records import K_LEVEL, K_TYPE_NAME
 
 TEXT = 2.5
 PAD_X = 2.0
 ROW_H = 6.0          # row height of one text line at 2.5 mm: max(2.5 * 2.4, 5) = 6 mm
-
+COST = u"@COST"
 
 def _wall_takeoff(**kw):
     """Standard walls as a material takeoff (layers expanded), the view the window shows for walls."""
@@ -117,7 +119,7 @@ def test_summary_rows_are_drawn_and_paged_with_their_block():
     lay = _layout(rs, s, page_h=60)
     summary = [t for p in lay.pages for t in p.texts if t[0] == "summary"]
     assert [t[1] for t in summary if t[1] == u"Total"] == [u"Total"] * 3
-    assert [t[1] for t in summary if t[1] != u"Total"] == [u"0.27", u"0.1", u"0.27"]
+    assert [t[1] for t in summary if t[1] != u"Total"] == [u"0.270", u"0.100", u"0.270"]
 
 
 def test_pagination_never_splits_a_block():
@@ -199,9 +201,10 @@ def test_sheet_bold_and_alignment():
 def test_sheet_number_formats():
     rs, s = _wall_takeoff()
     sh = build_sheet(P.build_table(rs, s).excel)
-    assert sh.numfmts[4] == u"0.0000"          # Thickness: 4 decimals (pipeline._KEY_DECIMALS)
+    assert sh.numfmts[4] == u"0.000"           # Thickness: length, 3 decimals (units.DEFAULT_DECIMALS)
     assert sh.numfmts[0] == u"General"         # Order is an integer: no format
-    assert sh.numfmts[6] == u"0.00"            # Material Area: 2 decimals
+    assert sh.numfmts[6] == u"0.00"            # Material Area: area, 2 decimals
+    assert sh.decimals[4] == 3 and sh.prefixes[4] == u""
 
 
 def test_sheet_without_calculations_has_no_formulas():
@@ -232,6 +235,36 @@ def test_heading_orientation_comes_only_from_appearance():
     s["appearance"]["elements"]["heading"]["orientation"] = "vertical"
     sh = build_sheet(P.build_table(rs, s).excel)
     assert sh.vertical == [True] * sh.ncols
+
+def _cost_set():
+    """One type, two elements on L0, both with a cost of 12.5 (currency, no width or height)."""
+    rs = RecordSet(-2000023, u"Doors")
+    for f in core_fields(False):
+        rs.add_field(f)
+    rs.add_field(Field(COST, u"Cost", "element", "currency"))
+    rs.add_type(TypeRecord(600, {K_TYPE_MARK: u"D1", K_FAMILY: u"Single", K_TYPE_NAME: u"0900x2100"}))
+    rs.add_element(ElementRecord(1, 600, {K_LEVEL: u"L0", COST: 12.5}))
+    rs.add_element(ElementRecord(2, 600, {K_LEVEL: u"L0", COST: 12.5}))
+    return rs
+
+
+def test_currency_prefix_in_revit_text_and_excel_format():
+    """Currency: the Revit text and the Excel format both carry the '$' prefix and 2 decimals.
+    The Excel cell keeps the number, so the value is still usable in formulas."""
+    rs = _cost_set()
+    s = P.default_settings(rs, "schedule", u"Cost check")
+    s["fields"].append(P.field_setting(COST))
+    res = P.build_table(rs, s)
+    cols = [c.key for c in res.excel.columns]
+    i = cols.index(COST)
+
+    sh = build_sheet(res.excel)
+    assert sh.numfmts[i] == u'"$ "0.00'
+    assert sh.values[2][i] == 12.5                       # the number, not text
+
+    lay = build_layout(res.revit, 2.5, 490)
+    data = [t[1] for t in lay.pages[0].texts if t[0] == "data"]
+    assert u"$ 12.50" in data
 
     
 if __name__ == "__main__":

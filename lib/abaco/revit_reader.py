@@ -19,8 +19,8 @@ from System import Guid
 
 from abaco.records import (
     Field, Layer, TypeRecord, ElementRecord, RecordSet, core_fields,
-    K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID,
-    M2)
+    K_TYPE_MARK, K_TYPE_NAME, K_FAMILY, K_LEVEL, K_WIDTH, K_HEIGHT, K_LENGTH, K_AREA, K_ELEMENT_ID)
+from abaco.units import M2
 
 try:
     _long = long            # IronPython 2.7: a long binds to ElementId(Int64)

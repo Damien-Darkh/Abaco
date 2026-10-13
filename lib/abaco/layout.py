@@ -8,11 +8,19 @@ Text tuples: (element, text, x, y, width_or_None, align, rotation_deg)
 Line tuples: (x0, y0, x1, y1). Only the line types switched on in the appearance are emitted.
 Band tuples: (x0, y0, x1, y1, colour_or_None). Row backgrounds (element background or zebra).
 
+Number text: cell_display() is the one place a number becomes text for Revit and the preview. It uses
+units.format_text with the column's decimals and currency prefix, so it shows what Excel shows.
 Alignment: data rows use the field's alignment (Formatting); title, heading, header, summary header
 and summary rows use the element's alignment (Appearance). Heading orientation comes from Appearance.
 """
 from abaco import appearance as AP
 from abaco import measure as M
+from abaco import units as U
+
+try:
+    _NUMBER = (int, long, float)
+except NameError:
+    _NUMBER = (int, float)
 
 MM = 1.0 / 304.8
 LINE_PITCH = 1.6        # distance between wrapped lines, x text height. Compare with Revit's Line Spacing
@@ -59,6 +67,7 @@ class TableLayout(object):
 
 
 def cell_text(v):
+    """Text of a value that is not a number (or a number without decimals, as Excel's General shows it)."""
     if v is None:
         return u""
     if isinstance(v, bool):
@@ -66,6 +75,18 @@ def cell_text(v):
     if isinstance(v, float):
         return format(v, ".15g")
     return (u"%s" % v).strip()
+
+
+def cell_display(v, decimals, prefix=u""):
+    """Text for one cell, the same as Excel displays it. Numbers go through units.format_text with the
+    column's decimals and currency prefix. decimals None (General) keeps the value as it is."""
+    if v is None or v == u"":
+        return u""
+    if isinstance(v, bool) or not isinstance(v, _NUMBER):
+        return cell_text(v)
+    if decimals is None:
+        return cell_text(v)
+    return U.format_text(v, decimals, prefix)
 
 
 def count_lines(text, cpl):
@@ -108,7 +129,9 @@ def build_layout(table, text_mm, page_h_mm, appearance=None):
     title = AP.apply_case(cell_text(table.title), AP.case_of(app, "title"))
     heads = [cell_text(h) for h in table.headings()]
     vertical_heads = els["heading"].get("orientation") == "vertical"
-    blocks = [[(kind, [cell_text(v) for v in line]) for kind, line in rows] for rows in table.rendered_blocks()]
+    # every number becomes its shown text here, once, so widths and wrapping measure what is drawn
+    blocks = [[(kind, [cell_display(v, c.decimals, c.prefix) for v, c in zip(line, cols)])
+               for kind, line in rows] for rows in table.rendered_blocks()]
 
     def tw(text, el):
         """Measured width of a text in mm for the element's style, with the safety margin."""

@@ -3,8 +3,10 @@
   pure functions   excel_view(), canvas_primitives(), ruler_items()   no WPF, unit-tested
   WPF drawing      fill_grid(), draw_canvas()                         WPF imports happen inside the functions
 The Revit preview is drawn from the SAME layout.build_layout output as the real drafting views.
+Every number is shown with layout.cell_display(), so the grid, the canvas and the Excel file agree.
 """
 from abaco import measure as M
+from abaco.layout import cell_display, count_lines   # noqa: F401  (count_lines kept for callers)
 
 PX_PER_MM = 3.6
 _PT_PER_MM = 2.835
@@ -13,28 +15,14 @@ CAPTION_PX = 18.0
 
 
 # ------------------------------------------------------------------------------------------- pure part
-def cell_display(v, col):
-    """Cell text as Excel will show it: floats use the column's decimals."""
-    if v is None or v == u"":
-        return u""
-    if isinstance(v, bool):
-        return u"%s" % v
-    if isinstance(v, float):
-        if col.decimals is not None:
-            return u"%.*f" % (col.decimals, v)
-        return format(v, ".15g")
-    return u"%s" % v
-
-
 def excel_view(table):
     """-> (headings, rows, kinds). rows hold display text; blocks are separated by a blank row.
     kinds: 'data' | 'total' | 'blank' (same length as rows)."""
     cols = table.columns
-    n = len(cols)
     rows, kinds = [], []
     for block in table.rendered_blocks():
         for kind, line in block:
-            rows.append([cell_display(v, c) for v, c in zip(line, cols)])
+            rows.append([cell_display(v, c.decimals, c.prefix) for v, c in zip(line, cols)])
             kinds.append("blank" if kind == "blank" else ("data" if kind == "data" else "total"))
     return table.headings(), rows, kinds
 
@@ -64,18 +52,9 @@ def ruler_items(layout, scale=PX_PER_MM):
 
 
 # ------------------------------------------------------------------------------------------ WPF part
-def _excel_cell(v, numfmt):
-    """Cell text as Excel shows it: floats use the number format's decimals."""
-    if v is None or v == u"":
-        return u""
-    if isinstance(v, bool):
-        return u"%s" % v
-    if isinstance(v, float):
-        if numfmt and numfmt != u"General":
-            dec = len(numfmt.split(u".")[1]) if u"." in numfmt else 0
-            return u"%.*f" % (dec, v)
-        return format(v, ".15g")
-    return u"%s" % v
+def _sheet_text(sheet, r, ci):
+    """Text of one sheet cell as Excel shows it (same decimals and currency prefix as the number format)."""
+    return cell_display(sheet.values[r - 1][ci], sheet.decimals[ci], sheet.prefixes[ci])
 
 
 def _w(on):
@@ -95,7 +74,7 @@ def _auto_mm(sheet, ci):
         if r == 2 and sheet.vertical[ci]:
             continue                              # a vertical heading does not widen the column
         e = app["elements"][el]
-        text = _excel_cell(sheet.values[r - 1][ci], sheet.numfmts[ci])
+        text = _sheet_text(sheet, r, ci)
         best = max(best, M.width_mm(text, fam, em, e["bold"], e["italic"]) * 1.06)
     return max(best + 2 * 0.8 * em, 12.0)
 
@@ -168,7 +147,7 @@ def _build_grid(host, sheet):
                 text = sheet.values[r - 1][0]
                 align = "center" if el == "title" else e.get("align", "left")
             else:
-                text = _excel_cell(sheet.values[r - 1][ci], sheet.numfmts[ci])
+                text = _sheet_text(sheet, r, ci)
                 align = sheet.aligns[ci] if el == "data" else e.get("align", "left")
 
             tb = TextBlock()
@@ -208,10 +187,12 @@ def _build_grid(host, sheet):
                 Grid.SetColumnSpan(border, n)
             host.Children.Add(border)
 
+
 def _brush(hexcolor):
     from System.Windows.Media import SolidColorBrush, Color
     h = (hexcolor or "#000000").lstrip("#")
     return SolidColorBrush(Color.FromRgb(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+
 
 def _band_fills(canvas, layout, scale):
     """Row backgrounds (background colour and zebra) behind the lines and text."""
@@ -234,7 +215,7 @@ def _band_fills(canvas, layout, scale):
             canvas.Children.Add(rect)
         off += page.height * scale + PAGE_GAP_PX
 
-    
+
 def draw_canvas(canvas, ruler, layout, scale=PX_PER_MM):
     """As-Revit preview: lines and text with the appearance styles, plus the per-column width ruler."""
     from System.Windows import FontWeights, FontStyles, TextAlignment, TextWrapping, TextDecorations
@@ -296,6 +277,7 @@ def draw_canvas(canvas, ruler, layout, scale=PX_PER_MM):
         tb.Foreground = Brushes.Gray
         tb.TextAlignment = TextAlignment.Center
         ruler.Children.Add(tb)
+
 
 def layout_font_px(layout, scale):
     """Text height in px: the layout's row height is 2.4 x text height (5 mm minimum)."""

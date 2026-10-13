@@ -383,8 +383,9 @@ def test_heading_override_decimals_and_unknown_field():
     s["fields"].append(P.field_setting("NOT_THERE"))
     r = build(only(rs, False), s)
     m = r.excel.to_matrix()
-    assert m[1][4] == u"Spessore"
-    assert [row[4] for row in m[2:5]] == [0.2, 0.1, 0.0]            # 1 decimal
+    assert m[1][4] == u"Spessore (m)"                 # override replaces the label, the unit is still added
+    assert [row[4] for row in m[2:5]] == [0.2, 0.05, 0.02]   # values stay raw; decimals only set the format
+    assert r.excel.columns[4].decimals == 1           # the 1 decimal shows in the Excel number format
     assert len(r.warnings) == 1 and u"NOT_THERE" in r.warnings[0]
 
 
@@ -418,7 +419,7 @@ def test_unknown_calc_mode_is_refused():
     except ValueError as ex:
         assert u"summary" in u"%s" % ex and u"Allowed" in u"%s" % ex
 
-        
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for n, f in tests:

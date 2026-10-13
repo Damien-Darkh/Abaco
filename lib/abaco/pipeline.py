@@ -176,8 +176,12 @@ class ColumnSpec(object):
         self.field = field
         self.dim = field.dim
         if self.dim:
-            p_unit, p_dec = project_default(rs, self.dim)
-            self.unit = st.get("unit") or p_unit
+            if field.scope == "formula":
+                self.unit = st.get("unit") or field.base_unit          # unit the formula computes in
+                _, p_dec = project_default(rs, self.dim)
+            else:
+                p_unit, p_dec = project_default(rs, self.dim)
+                self.unit = st.get("unit") or p_unit
             self.decimals = st["decimals"] if st.get("decimals") is not None else p_dec
         else:
             self.unit = None
