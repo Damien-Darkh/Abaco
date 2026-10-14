@@ -221,11 +221,11 @@ def run_doors():
     gts = kind_rows(res2, "gtotal")
     exp = 0.0
     for r in data_rows(res2):
-        w, h, c = r.cells.get(R.K_WIDTH), r.cells.get(R.K_HEIGHT), r.cells.get(R.K_COUNT)
-        if is_num(w) and is_num(h) and is_num(c):
-            exp += float(w) * float(h) * float(c)
+        w, h = r.cells.get(R.K_WIDTH), r.cells.get(R.K_HEIGHT)
+        if is_num(w) and is_num(h):
+            exp += float(w) * float(h)          # one value per row: the formula sees the row, not the elements
     got = gts[0].cells.get(u"calc:1") if gts else None
-    check("Grand total of Door Area = sum of width x height x count over the rows",
+    check("Grand total of Door Area = sum of width x height over the rows",
           len(gts) == 1 and approx(got, exp),
           u"got %s, expected %.6f" % (got, exp))
 
@@ -352,28 +352,34 @@ def tw_layer_total(s):
 
 
 def footer_expectation(res, rs, footer):
-    """(expected, rows covered, layers of the type) for one footer, from the record set.
+    """(expected, detail) for one footer, from the record set.
 
-    The rows a footer totals are the data rows directly above it in its block, back to the first row
-    of a different type. The expected value is 2 x the thickness of every layer of that type, taken from
-    the record set, so it does not depend on how the pipeline grouped the rows.
-    Returns (None, 0, 0) when the footer has no rows above it.
+    Covered rows: the contiguous data rows directly above the footer. Expected value: 2 x the layer
+    thicknesses of every distinct type in that run, taken from the record set. Detail lists the types and
+    row counts, so a mismatch can be read in the output.
     """
     for b in res.table.blocks:
         if footer not in b:
             continue
-        i = b.index(footer)
-        if i == 0 or b[i - 1].kind != "data" or not b[i - 1].els:
-            return None, 0, 0
-        tid = b[i - 1].els[0].type_id
-        covered, j = [], i - 1
-        while j >= 0 and b[j].kind == "data" and b[j].els and b[j].els[0].type_id == tid:
+        j = b.index(footer) - 1
+        covered = []
+        while j >= 0 and b[j].kind == "data":
             covered.insert(0, b[j])
             j -= 1
-        layers = rs.types[tid].layers or []
-        exp = 2.0 * sum(float(x.thickness) for x in layers)
-        return exp, len(covered), len(layers)
-    return None, 0, 0
+        types, rows_per_type = [], {}
+        for r in covered:
+            tid = r.els[0].type_id if r.els else None
+            if tid not in rows_per_type:
+                rows_per_type[tid] = 0
+                types.append(tid)
+            rows_per_type[tid] += 1
+        exp, detail = 0.0, []
+        for tid in types:
+            layers = (rs.types[tid].layers if tid in rs.types else None) or []
+            exp += 2.0 * sum(float(x.thickness) for x in layers)
+            detail.append(u"type %s: %d rows, %d layers" % (tid, rows_per_type[tid], len(layers)))
+        return exp, detail
+    return None, []
 
 
 def run_walls():
@@ -395,11 +401,13 @@ def run_walls():
         return
     bad_t = []
     for t in totals:
-        exp, n_cov, n_lay = footer_expectation(res, rs, t)
-        if exp is None or n_cov != n_lay or not approx(t.cells.get(u"calc:1"), exp):
-            bad_t.append((t, exp, n_cov, n_lay))
-    check("Footer totals equal 2 x the layer thicknesses of their type, from the record set",
+        exp, detail = footer_expectation(res, rs, t)
+        if exp is None or not approx(t.cells.get(u"calc:1"), exp):
+            bad_t.append((t.cells.get(u"calc:1"), exp, detail))
+    check("Footer totals equal 2 x the layer thicknesses of the types they cover, from the record set",
           not bad_t, u"%d footer rows checked, %d differ" % (len(totals), len(bad_t)))
+    for got, exp, detail in bad_t[:5]:
+        info(u"footer shows %s, expected %s | %s" % (got, exp, u"; ".join(detail)))
 
 
 # ---------------------------------------------- text and number functions

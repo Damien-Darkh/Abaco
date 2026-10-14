@@ -1,9 +1,9 @@
 # Abaco Tables: Development Plan
 
-Last updated: 13 October 2026
+Last updated: 14 October 2026
 
 - **Target:** Revit 2024, 2025, 2026 and 2027, with pyRevit 6.5 or newer on every machine.
-- **Status:** the extension runs in Revit 2025 test sessions. It reads the model, builds the table, writes the Excel tab, and creates drafting views and sheets. The Settings, Fields, Filter, Sort & group, Formatting and Appearance tabs are built. Custom fields are designed but not built.
+- **Status:** Phases 0 to 6 done for Revit 2025. Phase 7 (custom field editor) is next. Phase 0 still needs the Revit 2024 and 2027 smoke tests.
 - **UI reference:** the approved mockup, since changed in several places. The Preview tab as built is the reference.
 
 ---
@@ -34,13 +34,15 @@ Abaco.extension/
     ColorPicker.dll, ColorPicker.Models.dll
     formula.py          formula tokenizer, parser, unit and type checker (no Revit)
     evaluate.py         formula evaluator, per row (no Revit)
+    units.py            Units and decimals for display. Pure Python: no Revit, no WPF
     icons/              SVG source files (reference only; icons are inline in ui.xaml)
   Abaco.tab/Tables.panel/AbacoTables.pushbutton/
     script.py           window code
     ui.xaml             window
-  Abaco.tab/Tables.panel/AbacoTest.pushbutton/
+  Abaco.tab/Tables.panel/AbacoTest.pushbutton/     temporary, delete after Phase 13
   Abaco.tab/Tables.panel/Phase3Check.pushbutton/   temporary, delete after Phase 13
-  tests/                records, pipeline, outputs, ui, filters, measure, formula, evaluate; formula and evaluate done, others to update (Phase 13)
+  Abaco.tab/Tables.panel/Phase6Check.pushbutton/   temporary, delete after Phase 13
+  tests/                records, pipeline, outputs, ui, filters, units, formula, evaluate, custom; run with python3 tests/run_all.py (10 files, all passing on 14 October 2026)
 ```
 
 `table_builder.py` is retired. Delete it once Phase 0 passes.
@@ -60,13 +62,13 @@ Abaco.extension/
 
 | Phase | Name | Status | Depends on |
 |---|---|---|---|
-| 0 | Baseline: runs on every target Revit version | In progress | none |
+| 0 | Baseline: runs on every target Revit version | Done, In revit 2025 | none |
 | 1 | Data layer: flat records | Done | 0 |
 | 2 | Pipeline: settings to table | Done | 1 |
 | 3 | Output layers: Revit drawing and Excel writer | Done (known Revit limits) | 2 |
 | 4 | Window: Settings, Preview, Appearance, theme | Done, with icon column pending | 2, 3 |
-| 5 | Formula language and evaluator | Done for version 1 (Revit test pending) | 2 |
-| 6 | Custom fields in the table: catalogue, pipeline, calculated fields | Planned | 4, 5 |
+| 5 | Formula language and evaluator | Done (IronPython verified in Revit, 13 October 2026) | 2 |
+| 6 | Custom fields in the table: catalogue, pipeline, calculated fields | Done (Revit check: 26 of 26 passed) | 4, 5 |
 | 7 | Custom field editor and icon column | Planned | 4, 6 |
 | 8 | Custom model parameters (Revit) | Planned | 7 |
 | 9 | Saved settings, per category | Planned | 4, 6, 7, 8 |
@@ -165,7 +167,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 
 **Goal:** a formula can be written, checked and evaluated, with no Revit and no UI.
 
-**Status:** done for version 1. The full specification is `phase5.md`. `test_formula.py` (29 tests) and `test_evaluate.py` (24 tests) pass with `python3`. Not yet run under IronPython 2.7: that happens in the Revit test (Phase 13).
+**Status:** done. `formula.py` and `evaluate.py` pass their suites under CPython, and the Phase 6 button ran `STRING` and the other functions under IronPython 2.7 in Revit on 13 October 2026.
 
 **Version 1 scope**
 - **Grammar:** one expression. No chains, no blocks, no arrays. Chains `IF(c): v; ELIF (c): v; ELSE: v;` and blocks are version 2.
@@ -175,7 +177,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 - **Keywords:** case-insensitive, shown in capitals everywhere. Reserved: `AND OR IF ELIF ELSE TRUE FALSE SENSITIVE MIN MAX SQRT ROOT ABS INT FLOAT STRING LEN`.
 - **Units:** the exponent of `m` is tracked (`m` 1, `m²` 2, `m³` 3). `*` and `/` add and subtract exponents. `+`, `-`, `%` and comparisons need equal exponents; a literal `0` fits any unit. Suffixes `m`, `m²`, `m³` follow a number or a count (`{Count} m` is a length). A count plus a plain number stays a count. `MIN` and `MAX` with different units are refused at save time.
 - **Booleans:** `TRUE` and `FALSE` in any letter case. Yes/No fields are booleans in formulas. A boolean result shows as `#TRUE` or `#FALSE`.
-- **Empty and errors:** an empty value is `NONE`, shown `#NONE`. Arithmetic, functions and comparisons with NONE give NONE. `FALSE AND x` is FALSE and `TRUE OR x` is TRUE whatever `x` is. An error wins over NONE. Division or remainder by zero and an even root of a negative are `#ERROR` (reasons `div0`, `sqrt_neg`). Other run-time reasons: `ref` (row has no such field), `type` (a row value of the wrong type), `range` (result not a finite number).
+- **Empty and errors:** an empty value is `NONE`, shown `#NONE`. Arithmetic, functions and comparisons with NONE give NONE. An element field that varies inside a grouped row is `VARIES`, shown with the table’s Varies label. Arithmetic, functions and comparisons with VARIES give VARIES, so itemizing the table recalculates real values. Priority when values combine: an error wins, then NONE, then VARIES. A deciding `FALSE AND x` or `TRUE OR x` wins over NONE and VARIES, because it gives the same answer for every element. An error wins over NONE and VARIES. Division or remainder by zero and an even root of a negative are `#ERROR` (reasons `div0`, `sqrt_neg`). Other run-time reasons: `ref` (row has no such field), `type` (a row value of the wrong type), `range` (result not a finite number).
 - **Numbers:** `=` and `!=` use a tolerance of 1e-6, as filters do. Formulas run on full-precision values, not the rounded display values. `%` follows Python.
 - **Save-time checks, which refuse the save:** syntax with position; unknown field with the nearest match; circular reference with the full loop; unit mismatch; type mismatch; `AND` or `OR` on a non-boolean; literal division or remainder by zero; `SQRT` or even `ROOT` of a negative literal; a key containing `}`. Each error carries a position, a reason code (`syntax`, `unit`, `type`, `ref`, `div0`, `sqrt_neg`) and a suggested fix.
 - **Save-time dry run, which saves with a warning:** the formula is evaluated for every row. Failures are counted per reason, with up to three examples. Failing rows show `#ERROR`.
@@ -191,7 +193,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 
 **Goal:** calculated fields work in the table like any other field.
 
-Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are done. Custom fields appear in Add parameter, survive Reset, Re-read model and table type changes, and enable Edit and Delete on their rows. Tests: test_custom.py (21), test_ui.py (14). Still open: decimals from project settings (Open decision 5), a Revit test of filters on calculated fields, and Edit and Delete handlers (Phase 7).
+Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and Walls of the test copy. The row values, `#ERROR` and `#NONE` markers, circular references, unknown fields, grand totals, layer footers, the median row filter and the Excel readback all match independent calculations.
 
 **Scope**
 - Custom fields enter the catalogue with type and scope, and are marked as custom. The result type comes from the checked formula.
@@ -202,7 +204,9 @@ Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are do
 - **Removal:** a field removed from the table with × returns to Add parameter. Formulas that use it show `#ERROR` (reason `ref`), and the removal warning lists them.
 - **Names:** custom field names are checked against existing labels when created or edited.
 
-**Done when:** a calculated field works through filter, group, sort, footer, summary and Excel, and a removal shows the warning and `#ERROR`.
+**Units rule:** A model field (element, type, layer or group scope) takes its dimension from its kind, and its initial unit and decimals from the project’s Project Units, through `project_units()` and `pipeline.project_default()`. The Formatting tab can override either. A custom field takes its dimension from the formula’s checked result, and its initial unit from the unit that result is computed in (for example `{Width} * {Height}` starts in m²). The project sets only the decimals for a custom field. A custom field’s heading therefore does not change when the project’s area unit changes.
+
+**Done when:** a calculated field works through filter, group, sort, footer, summary and Excel, and a removal shows the warning and `#ERROR`.Not yet covered in Revit: `VARIES` results on a grouped row, a non-metric project, and the window checks for sort and group on a calculated field, removing a field with × while a formula uses it, Reset and Re-read model, and DRAW_REVIT. These are tracked in the manual checklist (Phase 13).
 
 ### Phase 7: Custom field editor and icon column
 
@@ -335,6 +339,10 @@ Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are do
 12. Italian-language Revit: localised parameter names and the decimal comma.
 13. Dark and light Revit UI: every window control is readable.
 14. Index: numbers run from 1 with no gaps across blocks, headers and footers, in both outputs.
+15. Varies: a custom field on an element field (for example `{Comments} + "!"`) shows Varies on a grouped row and real values when itemized.
+16. Non-metric project (cm² or ft²): model fields follow the project unit, custom headings keep the formula’s unit.
+17. Removing a field with × while a formula uses it shows the warning and `#ERROR`.
+18. Sort and group on a calculated field, then Reset and Re-read model: the custom field stays in the window.
 
 **Release**
 - Version in `bundle.yaml`, and a changelog.
@@ -380,6 +388,11 @@ Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are do
 | 2026-10-13 | Division by zero is `#ERROR`. `INT` rounds half away from zero; `ROUND(x, n)` comes later. `STRING` keeps a literal's typed text. |
 | 2026-10-13 | Editor: result unit derived and read-only; decimals automatic; the failing-row preview shows only on an error; kind is Calculated or Notes / comments (Notes disabled until Phase 8); keyboard is a two-column grid without scrolling. |
 | 2026-10-13 | Units and decimals: the project default comes from Revit’s Project Units (Manage tab) for each dimension. The Formatting tab can override the unit and the decimal places per field. Decimal places: 0 to 4 (1234, 1234.0, 1234.00, 1234.000, 1234.0000). Units by dimension: length (mm, cm, m, Km), area (mm2, cm2, m2, Km2), volume (mm3, cm3, m3, Km3), angle (rad, °, ‘, ‘’), currency ($, €, ¥ JPY, £, ¥ CNY). Fields with no dimension (counts, ratios, yes/no, text) have no unit drop-down. Stored values stay in base units (m, m², m³, radians); conversion happens only at output, after sorting, grouping, footers and formulas.
+| 2026-10-14 | Filters on calculated fields run after grouping, on row values. A row whose value is VARIES is kept, because its elements may match.
+| 2026-10-14 | A Varies input gives a Varies result, not #NONE, so that itemizing the table recalculates real values. Priority: error, NONE, VARIES.
+| 2026-10-14 | NONE AND FALSE is FALSE: a deciding value wins on either side, even against NONE or VARIES.
+| 2026-10-14 | Units: model fields start from the project unit and decimals. Custom fields start from the unit their formula computes in, and the project sets only their decimals.
+| 2026-10-14 | Phase 6 closed: Revit check 26 of 26 passed on Doors and Walls, with project units read from the model.
 
 ---
 
@@ -388,10 +401,8 @@ Status (13 October 2026): catalogue, storage, pipeline stage and UI hooks are do
 1. **Excel notes sync direction:** both ways with an explicit Sync action (proposed), or one way only?
 2. **Last-synced snapshot:** in the table settings, or on a hidden sheet in the workbook?
 3. **Test project:** a copy with shared parameters and custom families is available for Phase 8 and Phase 10?
-4. **Filters on calculated fields:** run after grouping, on row values (proposed), while model-field filters stay before grouping? A filter that mixes both applies the element filter first, then the row filter.
-5. **`Varies` as a formula input:** a grouped row can hold the word `Varies` (or a `min - max` text) in an element field. Applied in code as proposed: the pipeline hands it to the formula as NONE, so the result is `#NONE`. Confirm.
-6. **`NONE AND FALSE`:** applied in code as proposed: a deciding value (FALSE for AND, TRUE for OR) wins on either side, even against NONE, so `NONE AND FALSE` is FALSE. An error is never hidden by it. Confirm.
 
+Decisions 4 to 6 were closed on 14 October 2026. See the decisions log.
 ---
 
 ## 5. v2

@@ -57,6 +57,12 @@ class _NoneValue(object):
 
 NONE = _NoneValue()
 
+class _VariesValue(object):
+    def __repr__(self):
+        return "VARIES"
+
+
+VARIES = _VariesValue()      # the elements of a grouped row differ: the result is "Varies", not a value
 
 class Err(object):
     """A calculation error with a reason code (formula.R_* or R_RANGE) and a message."""
@@ -76,13 +82,19 @@ def is_error(v):
 def is_none(v):
     return v is NONE
 
+def is_varies(v):
+    return v is VARIES
 
-def to_cell(v):
-    """Value -> what the table cell shows (phase5.md 7.8). Numbers stay numbers, the pipeline formats them."""
+
+def to_cell(v, varies_label=u"Varies"):
+    """Value -> what the table cell shows. Numbers stay numbers, the pipeline formats them.
+    varies_label is the table's configurable 'Varies' word (labels["varies"])."""
     if isinstance(v, Err):
         return u"#ERROR"
     if v is NONE:
         return u"#NONE"
+    if v is VARIES:
+        return varies_label
     if v is True:
         return u"#TRUE"
     if v is False:
@@ -92,15 +104,17 @@ def to_cell(v):
 
 # ------------------------------------------------------------------------------------------- helpers
 def _prop(*vals):
-    """The first error, else NONE if any value is NONE, else None (all usable)."""
+    """The first error, else NONE, else VARIES, else None (all values usable)."""
     for v in vals:
         if isinstance(v, Err):
             return v
     for v in vals:
         if v is NONE:
             return NONE
+    for v in vals:
+        if v is VARIES:
+            return VARIES
     return None
-
 
 def _isnum(v):
     return isinstance(v, float)
@@ -133,6 +147,12 @@ def _from_raw(raw, kind, key):
         return NONE
     if isinstance(raw, Err):
         return raw
+    if raw is None or raw is NONE:
+        return NONE
+    if isinstance(raw, Err):
+        return raw
+    if raw is VARIES:
+        return VARIES
     if kind == "yesno":
         if isinstance(raw, bool):
             return raw
@@ -258,23 +278,28 @@ class _Eval(object):
 
     def and_or(self, node, is_or):
         """AND (is_or False) / OR (True). The deciding value (FALSE for AND, TRUE for OR) wins on either side,
-        even against NONE. On the left it also stops the right side from being evaluated."""
+        even against NONE or VARIES. On the left it also stops the right side from being evaluated."""
         decider = is_or
+        word = u"OR" if is_or else u"AND"
         l = self.run(node.left)
         if l is decider:
             return decider
         if isinstance(l, Err):
             return l
-        if l is not NONE and not isinstance(l, bool):
-            return _type_err(u"%s needs TRUE or FALSE on both sides" % (u"OR" if is_or else u"AND"))
+        if l is not NONE and l is not VARIES and not isinstance(l, bool):
+            return _type_err(u"%s needs TRUE or FALSE on both sides" % word)
         r = self.run(node.right)
         if isinstance(r, Err):
-            return r                                  # an error wins over NONE
-        if r is not NONE and not isinstance(r, bool):
-            return _type_err(u"%s needs TRUE or FALSE on both sides" % (u"OR" if is_or else u"AND"))
+            return r                                  # an error wins over NONE and VARIES
+        if r is not NONE and r is not VARIES and not isinstance(r, bool):
+            return _type_err(u"%s needs TRUE or FALSE on both sides" % word)
         if r is decider:
-            return decider                            # NONE AND FALSE is FALSE, NONE OR TRUE is TRUE
-        return NONE if (l is NONE or r is NONE) else r
+            return decider
+        if l is NONE or r is NONE:
+            return NONE
+        if l is VARIES or r is VARIES:
+            return VARIES
+        return r
 
     def compare(self, node):
         lnode, rnode, sens = node.left, node.right, False
@@ -325,7 +350,7 @@ class _Eval(object):
 
     def f_if(self, node):
         c = self.run(node.args[0])
-        if isinstance(c, Err) or c is NONE:
+        if isinstance(c, Err) or c is NONE or c is VARIES:
             return c
         if not isinstance(c, bool):
             return _type_err(u"the condition of IF must be TRUE or FALSE")
@@ -336,7 +361,7 @@ class _Eval(object):
         if lit is not None:
             return lit
         v = self.run(node.args[0])
-        if isinstance(v, Err) or v is NONE or isinstance(v, _STR):
+        if isinstance(v, Err) or v is NONE or v is VARIES or isinstance(v, _STR):
             return v
         if isinstance(v, bool):
             return u"TRUE" if v else u"FALSE"
@@ -452,6 +477,7 @@ class DryRun(object):
         self.none = 0
         self.by_reason = {}             # reason -> number of rows
         self.examples = []              # [(row id, reason, message)], at most max_examples
+        self.varies = 0
 
     @property
     def ok(self):
@@ -473,6 +499,8 @@ def dry_run(node, rows, kind_of=None, max_examples=3):
         v = evaluate(node, get, kind_of)
         if v is NONE:
             res.none += 1
+        elif v is VARIES:
+            res.varies += 1
         elif isinstance(v, Err):
             res.errors += 1
             res.by_reason[v.reason] = res.by_reason.get(v.reason, 0) + 1

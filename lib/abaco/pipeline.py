@@ -290,6 +290,8 @@ def sort_value(v):
     Formula values: NONE sorts with the empty cells, TRUE after FALSE, errors last."""
     if v is EV.NONE:
         return (0, 0, u"")
+    if v is EV.VARIES:
+        return (2, 1, u"")
     if isinstance(v, EV.Err):
         return (3, 0, u"")
     if isinstance(v, bool):
@@ -521,10 +523,10 @@ def _sort_rows(rows, levels):
     return rows
 
 
-def _header_text(r, lv, cols=()):
+def _header_text(r, lv, cols=(), labels=None):
     v = r.cells.get(lv["key"])
-    if v is EV.NONE or isinstance(v, (EV.Err, bool)):
-        return EV.to_cell(v)
+    if v is EV.NONE or v is EV.VARIES or isinstance(v, (EV.Err, bool)):
+        return EV.to_cell(v, (labels or {}).get("varies", u"Varies"))
     col = None
     for c in cols:
         if c.key == lv["key"]:
@@ -559,7 +561,7 @@ def _seg_items(seg, levels, i, cols, labels):
     lv = levels[i]
     out = []
     if lv.get("header"):
-        out.append(Row(ROW_HEADER, {}, label=_header_text(seg[0], lv, cols)))
+        out.append(Row(ROW_HEADER, {}, label=_header_text(seg[0], lv, cols, labels)))
     if i + 1 < len(levels):
         for sub in _segments(seg, levels[i + 1]):
             out.extend(_seg_items(sub, levels, i + 1, cols, labels))
@@ -645,13 +647,14 @@ def build_blocks(rows, levels, cols, labels, itemize, expanded, grand):
 
 
 # --------------------------------------------------------------------------------------------- stage 6
-def format_cells(blocks):
+def format_cells(blocks, labels=None):
     """Formula markers only. Numbers stay at full precision: rounding and units happen at output."""
+    varies = (labels or {}).get("varies", u"Varies")
     for b in blocks:
         for r in b:
             for k, v in list(r.cells.items()):
-                if v is EV.NONE or isinstance(v, (EV.Err, bool)):
-                    r.cells[k] = EV.to_cell(v)
+                if v is EV.NONE or v is EV.VARIES or isinstance(v, (EV.Err, bool)):
+                    r.cells[k] = EV.to_cell(v, varies)
     return blocks
 
 
@@ -791,7 +794,7 @@ def apply_formulas(rs, rows, customs, order, labels):
             v = cells[key]
             if isinstance(v, _STR) and (kinds.get(key) in NUMERIC_KINDS or
                                         (scopes.get(key) == "element" and v == varies)):
-                return None
+                return EV.VARIES                           # 'Varies' or a 'min – max' text: no single value
             return v
 
         done = {}
@@ -864,7 +867,7 @@ def build_table(rs, settings):
     warns = warns + c_warns + apply_formulas(rs, rows, customs, f_order, labels)
     rows = filters.apply_row_filters(rs, rows, settings.get("filter"), set(c.key for c in cols))
     blocks = build_blocks(rows, levels, cols, labels, itemize, expanded, bool(settings.get("grandTotals")))
-    blocks = format_cells(blocks)
+    blocks = format_cells(blocks, labels)
 
     if itemize and expanded and len(rows) > 500:
         warns.append(u"Itemized layered table: %d rows." % len(rows))

@@ -130,6 +130,8 @@ def _row_matches(op, kind, raw, value):
         raw = None
     elif isinstance(raw, EV.Err):
         return False                                # an error matches no condition
+    elif raw is EV.VARIES:
+        return True                                 # some elements of the row may match: the row stays
     elif isinstance(raw, bool):
         raw = u"Yes" if raw else u"No"
     return matches(op, kind, raw, value)

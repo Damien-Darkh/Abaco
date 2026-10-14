@@ -188,14 +188,24 @@ def test_division_by_zero_is_error_with_a_warning():
     assert any(u"div0: 3" in w and u"3 of 4 rows" in w and u"Ratio" in w for w in res.warnings), res.warnings
 
 
-def test_varies_input_is_none():
+def test_varies_input_gives_varies():
     rs = doors()
     s = setup(rs, [custom(u"calc:1", u"Note", u'{CMT} + "!"')], extra_fields=[P.field_setting(CMT)])
     res = build(rs, s)
     assert column(res, u"Comments") == [u"Varies", u"c", u"", u"a"]
-    assert column(res, u"Note") == [u"#NONE", u"c!", u"#NONE", u"a!"]          # D2/h2.2 has no comment: NONE too
+    assert column(res, u"Note") == [u"Varies", u"c!", u"#NONE", u"a!"]     # D2/h2.2: no comment, so NONE
     assert not res.warnings
 
+
+def test_varies_numeric_input_recalculates_when_itemized():
+    rs = doors()
+    rs.add_field(Field(u"RANK", u"Rank", "element", "number"))
+    for i, e in enumerate(rs.elements):
+        e.values[u"RANK"] = float(i + 1)                  # elements 1 and 2 share the D1/L0 row: 1.0 and 2.0
+    s = setup(rs, [custom(u"calc:1", u"Twice", u"{RANK} * 2")], extra_fields=[P.field_setting(u"RANK")])
+    assert column(build(rs, s), u"Twice") == [u"Varies", 8.0, 10.0, 6.0]
+    s["itemize"] = True                                    # ungrouped: every element has its own value
+    assert column(build(rs, s), u"Twice") == [2.0, 4.0, 8.0, 10.0, 6.0]
 
 def test_boolean_result_shows_markers_and_keeps_its_case():
     rs = doors()

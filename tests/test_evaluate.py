@@ -364,6 +364,27 @@ def test_circular_reference_error_carries_the_loop_keys():
     except F.FormulaError as ex:
         assert set(ex.loop) == set(["a", "b"]) and ex.reason == F.R_REF
 
+def test_varies_propagates_with_the_priority_none_then_varies():
+    V = E.VARIES
+    assert run(u"{Width (m)} * 2", width=V) is V
+    assert run(u"{Width (m)} + {Height (m)}", width=V, height=None) is NONE      # NONE decides for every element
+    err(run(u"{Width (m)} * ({Area (m\u00b2)} / {Count})", width=V, count=0), u"div0")
+    assert run(u"STRING({Width (m)})", width=V) is V
+
+
+def test_varies_with_and_or_and_if():
+    V = E.VARIES
+    v = u"{Width (m)} > 1 m"
+    assert run(u"FALSE AND " + v, width=V) is False       # the decider wins
+    assert run(v + u" OR TRUE", width=V) is True
+    assert run(v + u" AND TRUE", width=V) is V
+    assert run(u"IF(" + v + u", 1, 2)", width=V) is V
+    assert run(u"IF(TRUE, {Width (m)}, 0 m)", width=V) is V
+    assert run(u"IF(FALSE, {Width (m)}, 0 m)", width=V) == 0.0     # the unused branch is never evaluated
+
+
+def test_varies_cell_text_uses_the_label():
+    assert E.to_cell(E.VARIES) == u"Varies" and E.to_cell(E.VARIES, u"Varia") == u"Varia"
 
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
