@@ -30,6 +30,7 @@ from abaco import appearance as AP
 from abaco import color_picker
 from abaco.sheet import build_sheet
 from abaco import ui_theme
+from abaco import field_editor as FE
 
 doc = revit.doc
 
@@ -58,6 +59,7 @@ class AbacoWindow(WPFWindow):
     filter_tab = None            # created in __init__; XAML events may fire before that
     filter_result = None
     _loading_app = False
+    _active_list = "table"       # which list the user selected last: "table" or "suggest"
 
     def __init__(self):
         dark = ui_theme.revit_is_dark()
@@ -72,7 +74,6 @@ class AbacoWindow(WPFWindow):
         self._tb_items = self._title_blocks()
         self._init_controls()
         # one container-level handler per list (XamlReader cannot wire handlers inside DataTemplates)
-        self.fields_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.field_row_click))
         self.level_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.level_row_click))
         self.elem_list.AddHandler(Button.ClickEvent, RoutedEventHandler(self.elem_row_click))
         self.filter_tab = FilterTab(self.filter_list, self.filter_status, self.filter_all, self.filter_any,
@@ -177,18 +178,27 @@ class AbacoWindow(WPFWindow):
         if cat is None:
             return
         old = self.state.settings if (keep and self.state is not None) else None
-        self.status(u"Reading the model...")
-        self.log(u"Reading %s..." % cat.Name)
-        self.rs = rr.read_category(doc, cat, self.log)
-        for line in self.rs.summary_lines():
-            self.log(line)
-        self.category_info.Text = self.rs.summary_lines()[0]
-        self.table_type_note.Text = self.type_note()
-        settings = old if old is not None else self.default_settings()
-        self.new_state(settings)
-        self.bind_all()
-        self.sync_lists()
-        self.status(u"Ready")
+
+        # The log pumps the dispatcher so the text appears during the read. Without this, a click queued
+        # during the read runs before the state exists. A disabled window ignores input until we finish.
+        self.IsEnabled = False
+        try:
+            self.state = None
+            self.status(u"Reading the model...")
+            self.log(u"Reading %s..." % cat.Name)
+            self.rs = rr.read_category(doc, cat, self.log)
+            lines = self.rs.summary_lines()
+            for line in lines:
+                self.log(line)
+            self.category_info.Text = lines[0]
+            self.table_type_note.Text = self.type_note()
+            settings = old if old is not None else self.default_settings()
+            self.new_state(settings)
+            self.bind_all()
+            self.sync_lists()
+            self.status(u"Ready")
+        finally:
+            self.IsEnabled = True
 
     @staticmethod
     def _key_of(item):
@@ -349,7 +359,7 @@ class AbacoWindow(WPFWindow):
             return
         if self.tabs.SelectedIndex == 1:
             try:
-                if self.rs is None:
+                if self.state is None:
                     self.load_model()
                 else:
                     self.bind_all()
@@ -408,45 +418,82 @@ class AbacoWindow(WPFWindow):
             self.state.level_update(row.Index - 1, row)
         self.refresh_preview()
 
-
-    def field_row_click(self, sender, args):
-        btn = args.OriginalSource
-        while btn is not None and not isinstance(btn, Button):      # click may land on the inner text
-            btn = getattr(btn, "Parent", None)
-        if btn is None or self.state is None:
+    # --------------------------- table fields: icon column (up, down, remove) for the selected row
+    def update_field_buttons(self):
+        if self.state is None:
             return
-        tag, key = btn.Tag, getattr(btn.DataContext, "key", None)
-        if key is None or tag not in ("up", "down", "remove"):
-            return                                                  # e.g. the Include checkbox
-        try:
-            if tag == "remove":
-                if not self.state.remove_field(key):
-                    self.log(u"At least one field must stay in the table.")
-                    return
-            else:
-                self.state.move(key, -1 if tag == "up" else 1)
-            self.bind_fields()          # rebinds the list, the "x shown, y available" count and the suggestions
-            self.bind_format()          # removed field disappears from Formatting
+        idx = self.fields_list.SelectedIndex
+        n = self.fields_list.Items.Count
+        self.btn_field_up.IsEnabled = idx > 0
+        self.btn_field_down.IsEnabled = 0 <= idx < n - 1
+        self.btn_field_remove.IsEnabled = idx >= 0
+
+    def _field_index_of(self, key):
+        for i, s in enumerate(self.state.settings["fields"]):
+            if s["key"] == key:
+                return i
+        return -1
+
+    def _move_selected_field(self, delta):
+        row = self.fields_list.SelectedItem
+        if row is None or self.state is None:
+            return
+        if self.state.move(row.key, delta):
+            self.bind_fields()
+            self.bind_format()
             self.sync_lists()
+            i = self._field_index_of(row.key)          # keep the moved field selected
+            if i >= 0:
+                self.fields_list.SelectedIndex = i
+            self.update_field_buttons()
             self.refresh_preview()
-        except Exception as ex:
-            self.fail(ex)
+
+    def field_up_click(self, sender, args):
+        self._move_selected_field(-1)
+
+    def field_down_click(self, sender, args):
+        self._move_selected_field(1)
+
+    def field_remove_click(self, sender, args):
+        row = self.fields_list.SelectedItem
+        if row is None or self.state is None:
+            return
+        if not self.state.remove_field(row.key):
+            self.log(u"At least one field must stay in the table.")
+            return
+        self.bind_fields()
+        self.bind_format()
+        self.sync_lists()
+        self.refresh_preview()
 
     # ------------------------------------------------------------------ Add parameter icon column
     def _is_custom(self, row):
         return self.state is not None and self.state.is_custom(row.key)
 
+    def _selected_row(self):
+        """The selected row of the list the user clicked last: a table field or an Add parameter entry."""
+        if self._active_list == "table":
+            return self.fields_list.SelectedItem
+        return self.suggest_list.SelectedItem
+
     def update_suggest_buttons(self):
-        row = self.suggest_list.SelectedItem
-        self.btn_param_add.IsEnabled = row is not None
+        row = self._selected_row()
+        custom = row is not None and self._is_custom(row)
+        self.btn_param_add.IsEnabled = self._active_list == "suggest" and row is not None
         self.btn_param_custom.IsEnabled = True
-        self.btn_param_edit.IsEnabled = row is not None and self._is_custom(row)
-        self.btn_param_delete.IsEnabled = row is not None and self._is_custom(row)
+        self.btn_param_edit.IsEnabled = custom
+        self.btn_param_delete.IsEnabled = custom
+        self.update_field_buttons()
+
+    def table_selection_changed(self, sender, args):
+        if self._ready:
+            self._active_list = "table"
+            self.update_suggest_buttons()
 
     def suggest_selection_changed(self, sender, args):
         if self._ready:
+            self._active_list = "suggest"
             self.update_suggest_buttons()
-
     def suggest_add_click(self, sender, args):
         row = self.suggest_list.SelectedItem
         if row is None or self.state is None:
@@ -456,20 +503,95 @@ class AbacoWindow(WPFWindow):
             self.bind_format()
             self.refresh_preview()
 
+    def open_field_editor(self, key=None):
+        """Custom field editor over this window. key = the field to edit, None for a new field."""
+        if self.state is None:
+            self.load_model()
+        if self.state is None or self.rs is None:
+            self.log(u"The model is not read yet. Open the Preview tab first.")
+            return
+        existing = None
+        if key is not None:
+            found = [d for d in self.state.settings.get("custom", []) if d.get("key") == key]
+            if not found:
+                self.log(u"That custom field is not in the settings.")
+                return
+            existing = found[0]
+
+        ctx = FE.EditorContext(doc, self.rs, self.state.settings, self.state.table_keys(),
+                               key, self.state.labels, self.log)
+        new = FE.open_editor(self, script.get_bundle_file("new_parameter.xaml"), ctx, existing)
+        if new is None:
+            return
+
+        settings = self.state.settings
+        settings["custom"] = [d for d in settings.get("custom", []) if d.get("key") != new["key"]] + [new]
+        if key is None and not any(f["key"] == new["key"] for f in settings["fields"]):
+            settings["fields"].append(P.field_setting(new["key"]))   # a new field goes into the table
+        self.new_state(settings)                                      # rebuilds the catalogue and labels
+        self.bind_all()
+        self.sync_lists()
+        self.refresh_preview()
+
     def suggest_custom_click(self, sender, args):
-        self.log(u"TODO (Phase 7): the custom field editor is not built yet.")
+        self.open_field_editor(None)
 
     def suggest_edit_click(self, sender, args):
-        self.log(u"TODO (Phase 7): editing custom fields is not built yet.")
+        if self.state is None:
+            return
+        row = self._selected_row()
+        if row is not None and self._is_custom(row):
+            self.open_field_editor(row.key)
 
     def suggest_delete_click(self, sender, args):
-        self.log(u"TODO (Phase 7): deleting custom fields is not built yet.")
+        if self.state is None:
+            return
+        row = self._selected_row()
+        if row is None or not self._is_custom(row):
+            return
+        self.delete_custom_field(row.key)
+
+    def delete_custom_field(self, key):
+        """Deletes a custom field from the table, the settings, the sort levels and the filter."""
+        settings = self.state.settings
+        defs = settings.get("custom", [])
+        target = [d for d in defs if d.get("key") == key]
+        if not target:
+            self.log(u"That custom field is not in the settings.")
+            return
+        name = target[0].get("name", key)
+
+        # custom fields whose formulas read this one: they will show #ERROR after the delete
+        token = u"{%s}" % key
+        users = [d.get("name", d.get("key")) for d in defs
+                 if d.get("key") != key and token in (d.get("formula") or u"")]
+        msg = u"Delete the custom field '%s'?\n\nIt is removed from the table, its sort levels and its filter " \
+              u"conditions. This cannot be undone." % name
+        if users:
+            msg += u"\n\nThese fields use it and will show #ERROR: " + u", ".join(users)
+        if not forms.alert(msg, title=u"Delete custom field", yes=True, no=True):
+            return
+
+        settings["custom"] = [d for d in defs if d.get("key") != key]
+        settings["fields"] = [f for f in settings["fields"] if f.get("key") != key]
+        settings["levels"] = [l for l in settings.get("levels", []) if l.get("key") != key]
+
+        # the filter tab holds its own rows: remove them first, or sync_lists would bring them back
+        self.filter_tab.remove_key(key)
+
+        self.new_state(settings)          # attach_custom drops the catalogue entry
+        self.bind_all()
+        self.sync_lists()
+        self.refresh_preview()
+        self.log(u"Deleted custom field '%s'." % name)
 
     def param_search_changed(self, sender, args):
         if self._ready and self.state is not None:
             self.bind_suggest()
 
     def fields_reset_click(self, sender, args):
+        if self.state is None:
+            return
         if self.rs is None:
             return
         self.new_state(self.default_settings())

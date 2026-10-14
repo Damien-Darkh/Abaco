@@ -276,18 +276,21 @@
             </Setter>
         </Style>
         
-        <!-- icon button for the Add parameter column; disabled = icon at opacity 0.35 -->
+        <!-- icon button for the Add parameter column and the table field column; disabled = icon at opacity 0.35 -->
         <Style x:Key="IconButton" TargetType="Button">
             <Setter Property="Width" Value="28"/>
             <Setter Property="Height" Value="28"/>
             <Setter Property="Margin" Value="0,0,0,4"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="bd" Background="White" CornerRadius="4"
                                 BorderBrush="{StaticResource Line}" BorderThickness="1">
-                            <ContentPresenter x:Name="content" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <ContentPresenter x:Name="content" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -330,6 +333,7 @@
         <!-- sort direction toggle: A→Z, Z→A when checked -->
         <Style x:Key="DirToggle" TargetType="ToggleButton">
             <Setter Property="Content" Value="A→Z"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
             <Setter Property="Width" Value="52"/>
             <Setter Property="Height" Value="24"/>
             <Setter Property="FontSize" Value="11"/>
@@ -339,7 +343,8 @@
                     <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="bd" Background="White" BorderBrush="{StaticResource Line}"
                                 BorderThickness="1" CornerRadius="3">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
@@ -719,39 +724,77 @@
                                         <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Table fields"/>
                                     </DockPanel>
 
-                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                                        <ItemsControl x:Name="fields_list">
-                                            <ItemsControl.ItemTemplate>
+                                    <!-- table fields: selectable list, with one icon column on the right -->
+                                    <Grid Grid.Row="1">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <ListBox Grid.Column="0" x:Name="fields_list"
+                                                 Background="Transparent" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                                 ItemContainerStyle="{StaticResource FmItem}"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 SelectionChanged="table_selection_changed">
+                                            <ListBox.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Grid Height="26">
+                                                    <Grid Height="24">
                                                         <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="16"/>
-                                                            <ColumnDefinition Width="24"/>
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <TextBlock Text="⋮⋮" Foreground="#8A93A3" VerticalAlignment="Center"/>
-                                                        <CheckBox Grid.Column="1" IsChecked="{Binding Include, Mode=TwoWay}"/>
-                                                        <TextBlock Grid.Column="2" Text="{Binding Label}" VerticalAlignment="Center"
+                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
                                                                    TextTrimming="CharacterEllipsis"/>
-                                                        <Border Grid.Column="3" Style="{StaticResource ChipInfo}"
+                                                        <Border Grid.Column="1" Style="{StaticResource ChipInfo}"
                                                                 Visibility="{Binding HasScope, Converter={StaticResource B2V}}">
                                                             <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
                                                         </Border>
-                                                        <Button Grid.Column="4" Tag="up" Content="↑" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Move up"/>
-                                                        <Button Grid.Column="5" Tag="down" Content="↓" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Move down"/>
-                                                        <Button Grid.Column="6" Tag="remove" Content="×" Style="{StaticResource MiniButton}"
-                                                                ToolTip="Remove from table"/>
                                                     </Grid>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+
+                                        <!-- icon column: act on the selected table field -->
+                                        <StackPanel Grid.Column="1" Margin="6,4,0,0">
+
+                                            <!-- UP (angle-up-svgrepo-com.svg) -->
+                                            <Button x:Name="btn_field_up" Style="{StaticResource IconButton}"
+                                                    Click="field_up_click" ToolTip="Move up" IsEnabled="False">
+                                                <Viewbox Width="16" Height="16">
+                                                    <Canvas Width="16" Height="16">
+                                                        <Path Fill="{StaticResource Ink}"
+                                                              Data="M8.00003 7.82842L12.5858 12.4142L15.4142 9.58578L8.00003 2.17157L0.585815 9.58578L3.41424 12.4142L8.00003 7.82842Z"/>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+
+                                            <!-- DOWN (angle-down-svgrepo-com.svg) -->
+                                            <Button x:Name="btn_field_down" Style="{StaticResource IconButton}"
+                                                    Click="field_down_click" ToolTip="Move down" IsEnabled="False">
+                                                <Viewbox Width="16" Height="16">
+                                                    <Canvas Width="16" Height="16">
+                                                        <Path Fill="{StaticResource Ink}"
+                                                              Data="M8.00003 8.1716L3.41424 3.58582L0.585815 6.41424L8.00003 13.8285L15.4142 6.41424L12.5858 3.58582L8.00003 8.1716Z"/>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+
+                                            <!-- REMOVE (cross-svgrepo-com.svg) -->
+                                            <Button x:Name="btn_field_remove" Style="{StaticResource IconButton}"
+                                                    Click="field_remove_click" ToolTip="Remove from table" IsEnabled="False">
+                                                <Viewbox Width="16" Height="16">
+                                                    <Canvas Width="25" Height="25">
+                                                        <Path Fill="#9B1C1C"
+                                                              Data="M487.148,1053.48 L492.813,1047.82 C494.376,1046.26 494.376,1043.72 492.813,1042.16 C491.248,1040.59 488.712,1040.59 487.148,1042.16 L481.484,1047.82 L475.82,1042.16 C474.257,1040.59 471.721,1040.59 470.156,1042.16 C468.593,1043.72 468.593,1046.26 470.156,1047.82 L475.82,1053.48 L470.156,1059.15 C468.593,1060.71 468.593,1063.25 470.156,1064.81 C471.721,1066.38 474.257,1066.38 475.82,1064.81 L481.484,1059.15 L487.148,1064.81 C488.712,1066.38 491.248,1066.38 492.813,1064.81 C494.376,1063.25 494.376,1060.71 492.813,1059.15 L487.148,1053.48">
+                                                            <Path.RenderTransform>
+                                                                <TranslateTransform X="-469" Y="-1041"/>
+                                                            </Path.RenderTransform>
+                                                        </Path>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
 
                                     <GridSplitter Grid.Row="2" Height="2" HorizontalAlignment="Stretch" VerticalAlignment="Center"
                                                   Background="{StaticResource LineSoft}" Cursor="SizeNS" Margin="0,4,0,4" ShowsPreview="True"/>
@@ -875,20 +918,19 @@
                                                 </Viewbox>
                                             </Button>
 
-                                            <!-- DELETE (delete.svg, 16x16) -->
+                                            <!-- DELETE (trash-svgrepo-com.svg): enabled for custom fields only -->
                                             <Button x:Name="btn_param_delete" Style="{StaticResource IconButton}" Click="suggest_delete_click"
                                                     ToolTip="Delete the selected custom field" IsEnabled="False">
-                                                <Canvas Width="16" Height="16">
-                                                    <Path Data="M 3,1 L 10,1 L 13,4 L 13,15 L 3,15 Z" Fill="#E8EDEE"/>
-                                                    <Path Data="M 10,1 L 10,4 L 13,4 Z" Fill="#B0BEC5"/>
-                                                    <Rectangle Canvas.Left="5" Canvas.Top="4"  Width="3" Height="1" Fill="#78909C"/>
-                                                    <Rectangle Canvas.Left="5" Canvas.Top="6"  Width="6" Height="1" Fill="#78909C"/>
-                                                    <Rectangle Canvas.Left="5" Canvas.Top="8"  Width="6" Height="1" Fill="#78909C"/>
-                                                    <Rectangle Canvas.Left="5" Canvas.Top="10" Width="4" Height="1" Fill="#78909C"/>
-                                                    <Ellipse Canvas.Left="8.5" Canvas.Top="8.5" Width="7" Height="7" Fill="#E53935"/>
-                                                    <Path Data="M 10.5,12 L 13.5,12" Stroke="#FFFFFF" StrokeThickness="1.2"
-                                                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                                </Canvas>
+                                                <Viewbox Width="16" Height="16">
+                                                    <Canvas Width="26" Height="32">
+                                                        <Path Fill="#9B1C1C"
+                                                              Data="M268,220 C268,219.448 268.448,219 269,219 C269.552,219 270,219.448 270,220 L270,232 C270,232.553 269.552,233 269,233 C268.448,233 268,232.553 268,232 L268,220 L268,220 Z M273,220 C273,219.448 273.448,219 274,219 C274.552,219 275,219.448 275,220 L275,232 C275,232.553 274.552,233 274,233 C273.448,233 273,232.553 273,232 L273,220 L273,220 Z M278,220 C278,219.448 278.448,219 279,219 C279.552,219 280,219.448 280,220 L280,232 C280,232.553 279.552,233 279,233 C278.448,233 278,232.553 278,232 L278,220 L278,220 Z M263,233 C263,235.209 264.791,237 267,237 L281,237 C283.209,237 285,235.209 285,233 L285,217 L263,217 L263,233 L263,233 Z M277,209 L271,209 L271,208 C271,207.447 271.448,207 272,207 L276,207 C276.552,207 277,207.447 277,208 L277,209 L277,209 Z M285,209 L279,209 L279,207 C279,205.896 278.104,205 277,205 L271,205 C269.896,205 269,205.896 269,207 L269,209 L263,209 C261.896,209 261,209.896 261,211 L261,213 C261,214.104 261.895,214.999 262.999,215 L285.002,215 C286.105,214.999 287,214.104 287,213 L287,211 C287,209.896 286.104,209 285,209 L285,209 Z">
+                                                            <Path.RenderTransform>
+                                                                <TranslateTransform X="-261" Y="-205"/>
+                                                            </Path.RenderTransform>
+                                                        </Path>
+                                                    </Canvas>
+                                                </Viewbox>
                                             </Button>
                                         </StackPanel>
                                     </Grid>

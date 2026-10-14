@@ -278,14 +278,13 @@ class EditState(object):
 
     # ---- fields
     def field_rows(self, on_change=None):
-        """Only show fields that are set to appear somewhere (Hidden=false OR Excel=true)."""
+        """Every field of the table, in order. A field stays listed even when it is hidden in Revit and
+        off in Excel, so it can still be selected and removed."""
         rows = []
         for st in self.settings["fields"]:
             key = st["key"]
             lab = self.label(key) if self.rs.field(key) is not None else u"%s (not found)" % (st.get("heading") or key)
-            # Include only if visible in at least one output
-            if not (st.get("hiddenInRevit") and not st.get("showInExcel", True)):
-                rows.append(FieldRow(key, lab, True, self._scope_text(key), on_change))
+            rows.append(FieldRow(key, lab, True, self._scope_text(key), on_change))
         return rows
 
     def counts(self):

@@ -386,6 +386,16 @@ def test_varies_with_and_or_and_if():
 def test_varies_cell_text_uses_the_label():
     assert E.to_cell(E.VARIES) == u"Varies" and E.to_cell(E.VARIES, u"Varia") == u"Varia"
 
+def test_if_field_is_a_presence_test():
+    V = E.VARIES
+    assert run(u"IF({Width (m)}, 1, 2)") == 1.0
+    assert run(u"IF({Width (m)}, 1, 2)", width=None) == 2.0
+    assert run(u"IF({Width (m)}, 1, 2)", width=0.0) == 1.0          # 0 is a value
+    assert run(u"IF({Width (m)}, 1, 2)", width=V) is V
+    assert run(u"IF({Type Name}, \"y\", \"n\")", name=u"") == u"n"  # empty text is empty
+    assert run(u"IF({Load Bearing}, 1, 2)", load=None) is NONE     # Yes/No uses its value
+    assert run(u"IF({Load Bearing}, 1, 2)", load=u"No") == 2.0
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     for n, f in tests:

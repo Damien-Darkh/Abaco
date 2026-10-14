@@ -279,6 +279,13 @@ class FilterTab(object):
         self._fields[lab] = None
         return lab, self._labels + [lab]
 
+    def remove_key(self, key):
+        """Drops every condition on this field. Used when a custom field is deleted."""
+        for r in [r for r in self.rows if self.key_of(r.Column) == key]:
+            self.rows.Remove(r)
+        self._renumber()
+        self.changed()
+
     # ---- rows
     def _make_row(self, cond):
         if cond is None:

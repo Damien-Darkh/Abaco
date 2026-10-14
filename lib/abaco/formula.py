@@ -414,7 +414,9 @@ def _int_lit(node):
 def _is_sensitive(node):
     return node.kind == u"call" and node.name == u"SENSITIVE"
 
-
+def _is_field(node):
+    return node.kind == u"field"
+    
 def _arity_text(lo, hi):
     if hi is None:
         return u"at least %d argument(s)" % lo
@@ -669,10 +671,10 @@ class _Checker(object):
             return Ty(u"text")
         if name == u"IF":
             c, a, b = ts
-            if c.kind != u"bool":
+            if c.kind != u"bool" and not _is_field(n.args[0]):
                 return self.err(n.args[0].pos, R_TYPE,
                                 u"the condition of IF must be TRUE or FALSE, not %s" % unit_text(c),
-                                u"compare the value, for example {Width} > 0")
+                                u"put a field in the condition to test whether it has a value, for example IF({Width (m)}, ...)")
             if a.kind != b.kind:
                 return self.err(n.pos, R_TYPE,
                                 u"both branches of IF need the same type: %s and %s" % (unit_text(a), unit_text(b)),

@@ -3,7 +3,7 @@
 Last updated: 14 October 2026
 
 - **Target:** Revit 2024, 2025, 2026 and 2027, with pyRevit 6.5 or newer on every machine.
-- **Status:** Phases 0 to 6 done for Revit 2025. Phase 7 (custom field editor) is next. Phase 0 still needs the Revit 2024 and 2027 smoke tests.
+- **Status:** Phases 1 to 7 done for Revit 2025. Phase 0 still needs the Revit 2024 and 2027 smoke tests. Phase 8 (custom model parameters) is next, once its prerequisites in section 2 are met.
 - **UI reference:** the approved mockup, since changed in several places. The Preview tab as built is the reference.
 
 ---
@@ -16,7 +16,8 @@ Last updated: 14 October 2026
 Abaco.extension/
   lib/abaco/
     records.py          model data, neutral (no Revit)
-    revit_reader.py     the only module that reads the Revit API
+    units.py            units, decimals, display text, M2 (no Revit)
+    revit_reader.py     the only module that reads the Revit API; rs.project from Project Units
     pipeline.py         settings -> table (no Revit)
     layout.py           table -> drawing geometry, paged (no Revit)
     measure.py          text measurement for the layout (System.Drawing)
@@ -29,20 +30,21 @@ Abaco.extension/
     ui_state.py         window state and row items (no WPF on CPython)
     filters.py          filter conditions (no Revit)
     filter_ui.py        Filter tab controller
-    color_picker.py     PixiEditor colour picker, with hex fallback
-    ui_theme.py         light and dark copy of ui.xaml, following Revit 2025
-    ColorPicker.dll, ColorPicker.Models.dll
     formula.py          formula tokenizer, parser, unit and type checker (no Revit)
-    evaluate.py         formula evaluator, per row (no Revit)
-    units.py            Units and decimals for display. Pure Python: no Revit, no WPF
-    icons/              SVG source files (reference only; icons are inline in ui.xaml)
+    evaluate.py         formula evaluator, per row, incl. NONE and VARIES (no Revit)
+    field_editor.py     custom field editor code-behind (Phase 7)
+    ui_theme.py         light and dark copies of the XAML files, following Revit 2025
+    color_picker.py     PixiEditor colour picker, with hex fallback
+    ColorPicker.dll, ColorPicker.Models.dll
   Abaco.tab/Tables.panel/AbacoTables.pushbutton/
-    script.py           window code
-    ui.xaml             window
-  Abaco.tab/Tables.panel/AbacoTest.pushbutton/     temporary, delete after Phase 13
+    script.py           Tables window code
+    ui.xaml             Tables window
+    new_parameter.xaml  custom field editor, opened modally over the Tables window
+  Abaco.tab/Tables.panel/AbacoTest.pushbutton/
   Abaco.tab/Tables.panel/Phase3Check.pushbutton/   temporary, delete after Phase 13
   Abaco.tab/Tables.panel/Phase6Check.pushbutton/   temporary, delete after Phase 13
-  tests/                records, pipeline, outputs, ui, filters, units, formula, evaluate, custom; run with python3 tests/run_all.py (10 files, all passing on 14 October 2026)
+  tests/                records, units, pipeline, outputs, ui, filters, formula, evaluate, custom,
+                        formula integration; run with python3 tests/run_all.py (10 files, all passing 14 October 2026)
 ```
 
 `table_builder.py` is retired. Delete it once Phase 0 passes.
@@ -62,15 +64,15 @@ Abaco.extension/
 
 | Phase | Name | Status | Depends on |
 |---|---|---|---|
-| 0 | Baseline: runs on every target Revit version | Done, In revit 2025 | none |
+| 0 | Baseline: runs on every target Revit version | In progress, In revit 2025 | none |
 | 1 | Data layer: flat records | Done | 0 |
 | 2 | Pipeline: settings to table | Done | 1 |
 | 3 | Output layers: Revit drawing and Excel writer | Done (known Revit limits) | 2 |
 | 4 | Window: Settings, Preview, Appearance, theme | Done, with icon column pending | 2, 3 |
 | 5 | Formula language and evaluator | Done (IronPython verified in Revit, 13 October 2026) | 2 |
 | 6 | Custom fields in the table: catalogue, pipeline, calculated fields | Done (Revit check: 26 of 26 passed) | 4, 5 |
-| 7 | Custom field editor and icon column | Planned | 4, 6 |
-| 8 | Custom model parameters (Revit) | Planned | 7 |
+| 7 | Custom field editor and icon column | Done (Revit tested, 14 October 2026; element-error save check to verify) | 4, 6 |
+| 8 | Custom model parameters (Revit) | Next; prerequisites in section 2 | 7 |
 | 9 | Saved settings, per category | Planned | 4, 6, 7, 8 |
 | 10 | Notes and comments sync with Excel | Planned | 8, 9 |
 | 11 | Arrays and `len()` in formulas | Planned | 5, 6 |
@@ -173,6 +175,7 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 - **Grammar:** one expression. No chains, no blocks, no arrays. Chains `IF(c): v; ELIF (c): v; ELSE: v;` and blocks are version 2.
 - **Fields:** written `{Label}` in the editor, stored as `{key}`. `[ ]` is kept for arrays (Phase 11).
 - **Operators:** comparison `= != < > <= >=` (no chaining); logic `AND`, `OR` (booleans only, short-circuit); arithmetic `+ - * / %` and `^` (right-associative, whole-number literal exponent when the value has a unit); unary minus; grouping `( )`. `+` also joins two texts. `|x|` is dropped: use `ABS(x)`.
+- **Conditions:** A bare field may be the condition of `IF`. It is TRUE when the field has a value and FALSE when it is empty. A Yes/No field uses its own value. Expressions such as `{Width} + 1 m` or `{Width} > 1 m` still need TRUE or FALSE. There is no `HASVALUE` function.
 - **Functions:** `IF(c, a, b)` (lazy, both branches one type and unit), `MIN`, `MAX`, `SQRT`, `ROOT(x, n)`, `ABS`, `INT` (rounds half away from zero; a text gives its length), `FLOAT`, `STRING` (a literal keeps its typed text, other numbers use the shortest plain form), `SENSITIVE` (case-sensitive text comparison, on one side of `=` or `!=`). `LEN` is reserved and says "not available until version 2". `ROUND(x, n)` comes in version 2 or 3.
 - **Keywords:** case-insensitive, shown in capitals everywhere. Reserved: `AND OR IF ELIF ELSE TRUE FALSE SENSITIVE MIN MAX SQRT ROOT ABS INT FLOAT STRING LEN`.
 - **Units:** the exponent of `m` is tracked (`m` 1, `m²` 2, `m³` 3). `*` and `/` add and subtract exponents. `+`, `-`, `%` and comparisons need equal exponents; a literal `0` fits any unit. Suffixes `m`, `m²`, `m³` follow a number or a count (`{Count} m` is a length). A count plus a plain number stays a count. `MIN` and `MAX` with different units are refused at save time.
@@ -187,13 +190,13 @@ Phases 5 to 8 are the custom field work. Phase 7 comes before Phase 8, so the ed
 
 **Still to verify in Revit (Phase 13):** both files under IronPython 2.7; `repr()` of a float gives the shortest round-trip text there, which `STRING` relies on.
 
-**Done when (met for version 1):** the suites cover precedence, nesting, every save-time check, every run-time `#ERROR` case, and the dry run on sample rows.
+**Done** `formula.py` and `evaluate.py` pass their suites under CPython. The Phase 6 check ran `STRING` and the other functions under IronPython 2.7 in Revit on 13 October 2026.
 
 ### Phase 6: Custom fields in the table
 
 **Goal:** calculated fields work in the table like any other field.
 
-Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and Walls of the test copy. The row values, `#ERROR` and `#NONE` markers, circular references, unknown fields, grand totals, layer footers, the median row filter and the Excel readback all match independent calculations.
+Done (13 October 2026). The Revit check passed 26 of 26 on the Doors and Walls of the test copy. Row values, `#ERROR` and `#NONE` markers, circular references, unknown fields, grand totals, layer footers, the median row filter and the Excel readback all match independent calculations.
 
 **Scope**
 - Custom fields enter the catalogue with type and scope, and are marked as custom. The result type comes from the checked formula.
@@ -206,36 +209,42 @@ Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and
 
 **Units rule:** A model field (element, type, layer or group scope) takes its dimension from its kind, and its initial unit and decimals from the project’s Project Units, through `project_units()` and `pipeline.project_default()`. The Formatting tab can override either. A custom field takes its dimension from the formula’s checked result, and its initial unit from the unit that result is computed in (for example `{Width} * {Height}` starts in m²). The project sets only the decimals for a custom field. A custom field’s heading therefore does not change when the project’s area unit changes.
 
-**Done when:** a calculated field works through filter, group, sort, footer, summary and Excel, and a removal shows the warning and `#ERROR`.Not yet covered in Revit: `VARIES` results on a grouped row, a non-metric project, and the window checks for sort and group on a calculated field, removing a field with × while a formula uses it, Reset and Re-read model, and DRAW_REVIT. These are tracked in the manual checklist (Phase 13).
+**Units rule**
+A model field (element, type, layer or group scope) takes its dimension from its kind. Its initial unit and decimals come from the project’s Project Units, through `revit_reader.project_units()` and `pipeline.project_default()`. The Formatting tab can override either.
+
+A custom field takes its dimension from its formula’s checked result. Its initial unit is the unit that result is computed in, so `{Width} * {Height}` starts in m². The project supplies only the decimals. A custom field’s heading does not change when the project’s area unit changes.
+
+**Done when** Not yet run in Revit: a `VARIES` result on a grouped row, and a non-metric project (cm² or ft²). Both are in the Phase 13 checklist and should be run before Phase 8.
 
 ### Phase 7: Custom field editor and icon column
 
-**Goal:** create, edit and delete custom fields from the window.
+**Goal:** create, edit and delete custom fields from the Tables window.
 
-**Status:** the editor window (XAML) is designed and accepted. The code-behind (save checks, first failing row, editor capitalisation, field and key insertion) is not written.
+**Status (14 October 2026):** done and tested in Revit for delete, edit, cancel and Escape, self-reference and circular references, and the Notes option. The element-error save check was added after that test and still needs one run.
 
-**Scope**
-- **Icon column** in Add parameter, with four icons (SVG, 16 × 16, colours from the SVG):
-  - **Add:** adds the selected parameter to the table.
-  - **Custom field:** opens the editor.
-  - **Edit:** edits the selected custom field: name and formula. Greyed out for model parameters.
-  - **Delete:** deletes the selected custom field from the table, the parameter list, the catalogue and every saved reference (sort levels, filter conditions, formatting), after a confirmation. Greyed out for model parameters.
-- **Greyed out** means opacity 0.35 on the icon. Colours do not change.
-- **The × in the table list** returns a field to Add parameter. It does not delete it.
-- **Editor, Field card:** name (unique in the table) and kind: **Calculated** or **Notes / comments**. Notes / comments is shown but disabled until Phase 8, because it is a text model parameter. Choosing Notes hides the formula, keys, fields and example cards.
-- **Result unit** is derived from the checked formula and shown read-only. **Decimal places** are always automatic (see Open decisions 5). There is no unit or decimals control.
-- **Formula box:** a single line (no Enter). Keywords and function names are converted to capitals on the keystroke after the word is complete (`True` becomes `TRUE` when the next key is a separator). A word that continues into a longer name (`True_key`) is left alone. Nothing is converted inside `{ }` or `" "`, and units (`m`, `m²`, `m³`) are never converted. `formula.to_caps()` does the transform.
-- **Status and preview:** the status line shows the check result (valid, or the first error with its fix). The "Where it fails" box appears only when the formula or a row has an error, with the first failing row and its reason, from `evaluate.dry_run()`.
-- **Virtual keyboard:** a fixed two-column grid that does not scroll. Left: arithmetic and `%`, brackets, `,`, `=` and `^`, comparisons, then `SQRT` and `ROOT`. Right: `AND OR TRUE FALSE`; units `m m² m³` (always active, the checker explains misuse); `IF MIN MAX ABS`; `INT FLOAT STRING SENSITIVE`. Keys insert capitals. Each button has a tooltip with its use and an example, using full labels and units, for example `{Height (m)} > 3 m`.
-- **Field picker:** lists the table fields only. Double-click or Insert field puts `{Label}` at the cursor as one item. The saved formula stores keys (`formula.to_stored()`), the editor shows labels (`formula.to_editor()`).
-- **Example:** built by code from the table's own fields, with the units the checker needs.
-- **Save:** runs the Phase 5 checks, refuses to save on a save-time error, saves with a warning on row errors, and adds the new field to the table fields.
+**As built:**
+- **Editor:** a separate modal window, `new_parameter.xaml`, opened over the Tables window. Its code is in `field_editor.py`. Its left column scrolls as a whole, so the keys stay reachable on a short window. The keys are fixed size.
+- **Kind:** Calculated or Notes / comments. Notes is selectable now, so the layout can be seen. Choosing it hides the formula, fields, example and keys, and disables Save. It becomes a working option in Phase 8.
+- **Formula** checks: the checker runs on every change. The result unit is shown read-only, and decimals are automatic.
+- **Save:** runs the dry run on the model. If any row would show `#ERROR`, it asks for confirmation. No keeps the editor open. Yes saves, and those rows show `#ERROR`.
+- **Table fields:** a selectable list with no include checkbox. A field stays in the table until it is removed. An icon column on the right holds ↑ (angle-up), ↓ (angle-down) and × (cross). Each is enabled only when it applies.
+- **Add parameter:** an icon column holds Add, Custom field, Edit and Delete. Delete is the trash icon.
+- **Edit and Delete:** enabled only for custom fields. They act on the list clicked last, whether that is the table or Add parameter.
+- **Delete:** removes the field from the custom list, the table, the sort levels, the filter conditions and the catalogue. Formulas that use it are kept and show `#ERROR`. The confirmation names those formulas before deletion.
+- **Dark theme:** `ui_theme.py` recolours both XAML files. Each dark copy is written under its source file’s name, so the two windows don’t overwrite each other.
 
-**Done when:** a calculated field can be created, edited, removed from the table, and deleted, with the confirmation and clean-up described above.
+**Differences from the plan:**
+
+- The plan said Notes stays disabled until Phase 8. It is selectable now, with Save blocked, so the layout can be reviewed.
+- The plan’s Edit icon was for model parameters too. Edit and Delete apply to custom fields only, until Phase 8 adds model parameters.
+
+**Done when:** met, except the element-error save confirmation, which is in the Phase 13 checklist.
 
 ### Phase 8: Custom model parameters (Revit)
 
 **Goal:** create project parameters in the model and fill them from the table.
+
+**Status:** not started. Prerequisites: a test project with a shared parameter file and the categories in use (open decision 3), and the non-metric check from Phase 6.
 
 **Scope**
 - **Kinds:** instance or type. Chosen at creation.
@@ -322,7 +331,7 @@ Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and
 - Update `test_pipeline.py`, `test_outputs.py` and `test_ui.py` to the current structure.
 - Add tests for appearance, filters and measurement. Formula and evaluator tests exist; run them under IronPython 2.7 in the AbacoTest button, including `STRING` of a float.
 - Run every test file with `python3` on each change.
-- All nine test files pass under `tests/run_all.py` (custom 21, evaluate 26, filters 15, formula 29, formula integration 2, outputs 15, pipeline 26, records 9, ui 14). Run with `python3 tests/run_all.py` after every change.
+- All ten test files pass under `tests/run_all.py`on 14 October 2026: custom 24, evaluate 30, filters 16, formula 30, formula integration 2, outputs 17, pipeline 27, records 9, ui 14, units 10.
 
 **Manual checklist (Revit 2024 and 2027; spot-check 2025 and 2026)**
 1. The extension loads, and the ribbon button is present.
@@ -343,6 +352,7 @@ Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and
 16. Non-metric project (cm² or ft²): model fields follow the project unit, custom headings keep the formula’s unit.
 17. Removing a field with × while a formula uses it shows the warning and `#ERROR`.
 18. Sort and group on a calculated field, then Reset and Re-read model: the custom field stays in the window.
+19. Save with a formula that gives `#ERROR` on some rows: the confirmation appears, No keeps the editor open, and Yes saves.
 
 **Release**
 - Version in `bundle.yaml`, and a changelog.
@@ -393,6 +403,18 @@ Status (13 October 2026): done. The Revit check passed 26 of 26 on the Doors and
 | 2026-10-14 | NONE AND FALSE is FALSE: a deciding value wins on either side, even against NONE or VARIES.
 | 2026-10-14 | Units: model fields start from the project unit and decimals. Custom fields start from the unit their formula computes in, and the project sets only their decimals.
 | 2026-10-14 | Phase 6 closed: Revit check 26 of 26 passed on Doors and Walls, with project units read from the model.
+| 2026-10-14 | A bare field is accepted as the condition of IF: TRUE when it has a value, FALSE when empty, its own value for Yes/No. No `HASVALUE` function.
+| 2026-10-14 | Varies as a formula input gives Varies. NONE AND FALSE is FALSE. Priority: error, NONE, VARIES.
+| 2026-10-14 | Filters on calculated fields run after grouping on row values. A VARIES row is kept.
+| 2026-10-14 | 	Units: model fields start from the project unit and decimals. Custom fields start from the unit their formula computes in; the project sets only their decimals.
+| 2026-10-14 | Phase 6 closed: Revit check 26 of 26 on Doors and Walls, project units read from the model.
+| 2026-10-14 | The custom field editor is a separate modal window over the Tables window, with its own XAML and code file.
+| 2026-10-14 | Notes / comments is selectable before Phase 8 so the layout can be reviewed. Save is blocked while it is selected.
+| 2026-10-14 | Delete removes a custom field everywhere. Formulas that use it keep their text and show `#ERROR`; the confirmation names them.
+| 2026-10-14 | Table fields are a selectable list with no include checkbox. Removal is by ×, and up and down use an icon column.
+| 2026-10-14 | Edit and Delete follow the list clicked last. Both are enabled for custom fields only.
+| 2026-10-14 | Save runs the dry run. If any row gives `#ERROR`, the user confirms before saving.
+| 2026-10-14 | Icons are inline WPF path geometry, filled with the theme’s Ink brush, so they follow dark mode.
 
 ---
 

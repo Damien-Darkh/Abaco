@@ -339,6 +339,8 @@ class _Eval(object):
             return self.f_if(node)
         if name == u"STRING":
             return self.f_string(node)
+        if name == u"HASVALUE":
+            return self.f_hasvalue(node)
         args = [self.run(a) for a in node.args]
         p = _prop(*args)
         if p is not None:
@@ -349,12 +351,27 @@ class _Eval(object):
         return fn(args)
 
     def f_if(self, node):
-        c = self.run(node.args[0])
+        cond = node.args[0]
+        c = self.field_condition(cond) if cond.kind == u"field" else self.run(cond)
         if isinstance(c, Err) or c is NONE or c is VARIES:
             return c
         if not isinstance(c, bool):
             return _type_err(u"the condition of IF must be TRUE or FALSE")
         return self.run(node.args[1] if c else node.args[2])     # lazy: the other branch is never evaluated
+
+    def field_condition(self, node):
+        """A bare field as the IF condition. A Yes/No field gives its value. Any other field is TRUE when
+        it has a value and FALSE when it is empty. Errors and VARIES pass through."""
+        v = self.run(node)
+        if isinstance(v, Err) or v is VARIES:
+            return v
+        if self.kind_of and self.kind_of(node.key) == "yesno":
+            return v                                   # an empty Yes/No stays NONE
+        if v is NONE:
+            return False
+        if isinstance(v, _STR) and v == u"":
+            return False
+        return True
 
     def f_string(self, node):
         lit = _literal_text(node.args[0])
@@ -366,6 +383,18 @@ class _Eval(object):
         if isinstance(v, bool):
             return u"TRUE" if v else u"FALSE"
         return _shortest(v)
+
+    def f_hasvalue(self, node):
+        v = self.run(node.args[0])
+        if isinstance(v, Err):
+            return v                       # an error stays an error, it is not an empty value
+        if v is NONE:
+            return False
+        if v is VARIES:
+            return VARIES
+        if isinstance(v, _STR) and v == u"":
+            return False
+        return True
 
     @staticmethod
     def _numbers(args, name):

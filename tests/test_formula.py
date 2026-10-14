@@ -168,7 +168,8 @@ def test_if_function():
     assert ok(u"IF({Load Bearing}, {Width (m)}, {Height (m)})") == u"m"
     assert ok(u"IF({Load Bearing}, 1, IF({Count} > 2, 2, 3))") == u"unitless"
     assert ok(u"IF({Load Bearing}, IF({Count} > 1, {Width (m)}, {Height (m)}), {Height (m)})") == u"m"  # nested IF scrutiny
-    bad(u"IF({Width (m)}, 1, 2)", "type")                # condition must be boolean
+    assert ok(u"IF({Width (m)}, 1, 2)") == u"unitless"     # a field is a presence test
+    bad(u"IF({Width (m)} + 1 m, 1, 2)", "type")            # an expression still needs TRUE or FALSE
     bad(u"IF({Load Bearing}, {Width (m)}, 2)", "unit")   # branches need the same unit
     bad(u'IF({Load Bearing}, 1, "a")', "type")           # branches need the same type
     bad(u"IF({Load Bearing}, 1)", "syntax")              # arity
@@ -246,7 +247,11 @@ def test_to_caps_leaves_fields_text_and_units():
     assert F.to_caps(u'"true" and x') == u'"true" AND x'
     assert F.to_caps(u"2 m + {Count} m") == u"2 m + {Count} m"
 
-
+def test_bare_field_condition():
+    assert ok(u"IF({Width (m)}, 1, 2)") == u"unitless"     # a field is a presence test
+    assert ok(u"IF({Load Bearing}, 1, 2)") == u"unitless"  # a Yes/No field is its own TRUE or FALSE
+    bad(u"IF({Width (m)} + 1 m, 1, 2)", "type")            # an expression still needs TRUE or FALSE
+    
 # -------------------------------------------------------------------------------- test runner
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Light and dark theme for the Abaco window, following Revit's UI theme.
+"""Light and dark theme for the Abaco windows, following Revit's UI theme.
 
 revit_is_dark() reads Revit's UI theme (UIThemeManager, Revit 2025 and later). Older versions return light.
 themed_xaml() returns the path of the XAML to load: the original for light, or a dark copy written to the
-temp folder. ui.xaml itself is never changed.
+temp folder under the source file's name, so two windows never overwrite each other's copy.
 
 Colours in the light XAML are replaced by their dark equivalents. Paper and Excel preview areas use
 #FFFFFF in the XAML, so they are not in the list and stay white in both themes.
@@ -23,6 +23,8 @@ _LIGHT_TO_DARK = {
     "#8A4B08": "#F2B67A",    # WarnText
     "#E3F3EA": "#1F4A32",    # GoodBg
     "#14653D": "#7FD3A0",    # GoodText
+    "#FBE3E3": "#4A2626",    # ErrBg (field editor)
+    "#9B1C1C": "#F4B4B4",    # ErrText (field editor)
     "#EAF1FD": "#26354F",    # AccentSoft
     "#E6EEFB": "#26354F",    # ChipInfo
     "#EEF0F3": "#3A4150",    # Chip
@@ -32,6 +34,7 @@ _LIGHT_TO_DARK = {
     "#8A93A3": "#6E788A",    # drag grip
     "#F0F2F5": "#2A303B",    # grid header
     "#E3E7ED": "#181B21",    # Revit preview scroll area
+    "#2459B8": "#5B8EE8",    # AccentHover
 }
 _SURFACE_DARK = "#262A33"    # cards, text boxes, buttons, combo boxes
 
@@ -66,7 +69,8 @@ def themed_xaml(src, dark, log=None):
         if log:
             log(u"Dark theme copy is not valid XML, using light: %s" % ex)
         return src
-    out = os.path.join(tempfile.gettempdir(), "abaco_tables_dark.xaml")
+    base = os.path.splitext(os.path.basename(src))[0]
+    out = os.path.join(tempfile.gettempdir(), "abaco_%s_dark.xaml" % base)
     with io.open(out, "w", encoding="utf-8") as f:
         f.write(text)
     return out
