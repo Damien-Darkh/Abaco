@@ -43,6 +43,7 @@ Abaco.extension/
   Abaco.tab/Tables.panel/AbacoTest.pushbutton/
   Abaco.tab/Tables.panel/Phase3Check.pushbutton/   temporary, delete after Phase 13
   Abaco.tab/Tables.panel/Phase6Check.pushbutton/   temporary, delete after Phase 13
+  docs/                 Icons and userguide
   tests/                records, units, pipeline, outputs, ui, filters, formula, evaluate, custom,
                         formula integration; run with python3 tests/run_all.py (10 files, all passing 14 October 2026)
 ```

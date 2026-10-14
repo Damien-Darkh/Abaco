@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 94 94" width="94" height="94">
+  <defs>
+    <!-- Pencil Body Gradient -->
+    <linearGradient id="bodyGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E59B00" />
+      <stop offset="50%" stop-color="#FFC107" />
+      <stop offset="100%" stop-color="#FFE082" />
+    </linearGradient>
+
+    <!-- Ferrule (Metal Band) Gradient -->
+    <linearGradient id="ferruleGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#B0BEC5" />
+      <stop offset="50%" stop-color="#CFD8DC" />
+      <stop offset="100%" stop-color="#ECEFF1" />
+    </linearGradient>
+
+    <!-- Eraser Gradient -->
+    <linearGradient id="eraserGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#C2185B" />
+      <stop offset="60%" stop-color="#E91E63" />
+      <stop offset="100%" stop-color="#F48FB1" />
+    </linearGradient>
+
+    <!-- Wood Collar Gradient -->
+    <linearGradient id="woodGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#BDBDBD" />
+      <stop offset="100%" stop-color="#EEEEEE" />
+    </linearGradient>
+  </defs>
+
+  <g transform="rotate(-45 47 47)">
+    <!-- Graphite Tip -->
+    <path d="M 42 78 L 47 88 L 52 78 Z" fill="#616161" />
+
+    <!-- Wood / Cone Base -->
+    <path d="M 37 66 L 42 78 L 52 78 L 57 66 Z" fill="url(#woodGradient)" />
+
+    <!-- Pencil Yellow Body -->
+    <rect x="37" y="28" width="20" height="38" fill="url(#bodyGradient)" rx="1" />
+
+    <!-- Ferrule (Silver Band) -->
+    <rect x="37" y="16" width="20" height="12" fill="url(#ferruleGradient)" rx="1" />
+
+    <!-- Eraser Top -->
+    <path d="M 37 16 C 37 8, 57 8, 57 16 Z" fill="url(#eraserGradient)" />
+  </g>
+</svg>

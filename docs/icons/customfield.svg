@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Main Sigma Symbol (Yellow) -->
+  <path d="M 18 16 L 46 16 L 46 23 L 29 23 L 38 32 L 29 41 L 46 41 L 46 48 L 18 48 L 18 43 L 31 32 L 18 21 Z" fill="
+#FFC107"/>
+
+  <!-- Inner Highlight on Sigma -->
+  <path d="M 18 16 L 46 16 L 46 20 L 25 20 L 18 16 Z" fill="
+#FFD54F"/>
+</svg>
