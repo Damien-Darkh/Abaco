@@ -211,6 +211,19 @@ def _read_param(doc, p, kind):
         return nm or None
     return None
 
+def category_key(category):
+    """Stable key for a category: the English BuiltInCategory name (OST_Walls). A model category
+    that is not built in gets a fallback key from its localised name."""
+    target = eid_val(category.Id)
+    for name in dir(DB.BuiltInCategory):
+        if name.startswith("OST_"):
+            try:
+                if int(getattr(DB.BuiltInCategory, name)) == target:
+                    return name
+            except Exception:
+                continue
+    return u"custom:%s" % category.Name
+
 
 # ------------------------------------------------------------------------------ v1 core values (ported)
 def _length(el, typ, names):

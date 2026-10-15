@@ -1,22 +1,44 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Abaco Tables" Width="1240" Height="880" MinWidth="1100" MinHeight="760"
+        Title="Abaco Tables" Width="1240" Height="900" MinWidth="1100" MinHeight="760"
         WindowStartupLocation="CenterScreen" Background="#F4F5F7"
         FontFamily="Segoe UI" FontSize="12" UseLayoutRounding="True" SnapsToDevicePixels="True"
-        ShowInTaskbar="False" Foreground="#1C1F24">
-
+        ShowInTaskbar="False" Foreground="#1C1F24"
+        Closing="window_closing">
 
     <!--
-    CODE CONTRACT (script.py)
-    Row items are INotifyPropertyChanged (ui_state.py). Button clicks inside list templates are handled
-    by one AddHandler per list: args.OriginalSource.Tag and .DataContext.
-      fields_list  : Tag up | down | remove                 (FieldRow.Include is two-way)
-      suggest_list : Tag add
-      level_list   : Tag remove                              (LevelRow: Column, Descending, Header, Footer, Gap, FooterMode)
-      filter_list  : Tag remove
-      elem_list    : Tag text | bg | bgnone                  (ElemRow: Bold, Italic, Underline, Lines, Case)
-      format_list  : selection only
-    Handlers on named elements: see script.py. Guard every handler with a ready flag (events fire while loading).
+    CODE CONTRACT (script.py). Keep this in step with the handlers.
+
+    Lists and selection
+      fields_list       SelectionChanged = table_selection_changed. Icon column: btn_field_up,
+                        btn_field_down, btn_field_remove (click handlers field_up_click, field_down_click,
+                        field_remove_click). Enabled state set by update_field_buttons().
+      suggest_list      SelectionChanged = suggest_selection_changed. Icon column: btn_param_add,
+                        btn_param_custom, btn_param_edit, btn_param_delete. Edit and Delete are enabled
+                        only for custom fields.
+      level_list        ItemsControl. Row remove button has Tag="remove". Handled by one AddHandler
+                        (level_row_click) on the list.
+      filter_list       ItemsControl. Row remove button has Tag="remove". Handled by FilterTab.
+      elem_list         ItemsControl. Buttons with Tag text | bg | bgnone. Handled by elem_row_click.
+      format_list       SelectionChanged = format_selection_changed. Selection only.
+
+    Output and store
+      tb_name, tb_path, tb_prefix, tb_page_h, cmb_titleblock, tb_title are saved per category and table type.
+      btn_save          save_click. Disabled when the store is blocked (newer file). store_note explains why.
+      txt_unsaved       shown when the window differs from the last saved entry.
+      window_closing    Closing event. Prompts when txt_unsaved is visible.
+      store_note        shown when the store was blocked or a file was moved aside.
+      missing_note      shown when the saved settings contain fields not in this project.
+
+    Row numbers
+      chk_rownum, tb_rownum_heading  rownum_changed. Stored as settings["rowNumbers"].
+
+    Preview messages
+      preview_status    one line, set by refresh_preview.
+      revit_size_note   "TOO BIG" chip, set by size_warning. Collapsed when the table fits.
+      revit_hidden_note, revit_calc_note, revit_scale_note  set in code. revit_scale_note uses PX_PER_MM.
+
+    Events fire while the XAML loads. Every handler guards with its ready flag.
     -->
 
     <Window.Resources>
@@ -34,6 +56,7 @@
         <SolidColorBrush x:Key="WarnText" Color="#8A4B08"/>
         <SolidColorBrush x:Key="GoodBg" Color="#E3F3EA"/>
         <SolidColorBrush x:Key="GoodText" Color="#14653D"/>
+        <SolidColorBrush x:Key="ErrText" Color="#9B1C1C"/>
 
         <!-- text and surfaces -->
         <Style x:Key="Card" TargetType="Border">
@@ -48,7 +71,7 @@
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="0,0,0,6"/>
-            <Setter Property="Foreground" Value="#1C1F24"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
         </Style>
         <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -58,6 +81,9 @@
             <Setter Property="Foreground" Value="{StaticResource Muted}"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="WarnHint" TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+            <Setter Property="Foreground" Value="{StaticResource WarnText}"/>
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Height" Value="26"/>
@@ -275,8 +301,8 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        
-        <!-- icon button for the Add parameter column and the table field column; disabled = icon at opacity 0.35 -->
+
+        <!-- icon button: disabled = icon at opacity 0.35 -->
         <Style x:Key="IconButton" TargetType="Button">
             <Setter Property="Width" Value="28"/>
             <Setter Property="Height" Value="28"/>
@@ -409,7 +435,7 @@
             </Setter>
         </Style>
 
-        <!-- selectable row in the Formatting field list -->
+        <!-- selectable row in lists -->
         <Style x:Key="FmItem" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="4,0"/>
             <Setter Property="Height" Value="25"/>
@@ -437,21 +463,7 @@
             </Setter>
         </Style>
 
-        <!-- preview grid cell: "Varies" becomes an orange pill -->
-        <Style x:Key="CellText" TargetType="TextBlock">
-            <Setter Property="Margin" Value="6,3"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding Text, RelativeSource={RelativeSource Self}}" Value="Varies">
-                    <Setter Property="FontStyle" Value="Italic"/>
-                    <Setter Property="Foreground" Value="{StaticResource WarnText}"/>
-                    <Setter Property="Background" Value="{StaticResource WarnBg}"/>
-                    <Setter Property="Padding" Value="6,0"/>
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- one field of Sort & group: badge, column, A→Z toggle, remove; second line: Header / Footer / Calc / Gap -->
+        <!-- one sort level: badge, column, A→Z toggle, remove; second line: Header / Footer / Calc / Gap -->
         <DataTemplate x:Key="LevelRow">
             <Grid Margin="0,0,0,6">
                 <Grid.ColumnDefinitions>
@@ -550,6 +562,7 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- header -->
@@ -564,7 +577,7 @@
             <!-- ============================================================ -->
             <!-- SETTINGS                                                     -->
             <!-- ============================================================ -->
-            <TabItem Header="Settings">
+            <TabItem x:Name="tab_settings" Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,10,6,0">
                     <StackPanel>
 
@@ -622,23 +635,26 @@
                                              ToolTip="Title row of the table. Leave blank for 'Abaco &lt;Category&gt;'."/>
                                     <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Table name" Margin="0,6,0,0"/>
                                     <TextBox x:Name="tb_name" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
-                                             ToolTip="Excel tab name, and the key used to find the Revit views again on the next run."/>
+                                             ToolTip="Excel tab name. Also the key Abaco uses to find the Revit views on the next run, so keep it unchanged between runs."/>
                                     <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,4,0,0"
-                                               Text="Columns, sorting and formatting are set in the Preview tab."/>
+                                               Text="Excel tab name, and the key used to find the Revit views on the next run. Keep it unchanged between runs. Columns, sorting and formatting are set in the Preview tab."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource Card}">
                             <StackPanel>
                                 <CheckBox x:Name="chk_revit" IsChecked="True" Margin="0,0,0,8"
                                           FontSize="13" FontWeight="SemiBold"
-                                          Content="3 · Create / update drafting views and sheets in Revit"/>
-                                <Grid IsEnabled="{Binding IsChecked, ElementName=chk_revit}">
+                                          Content="3 · Create / update drafting views in Revit"/>
+                                <Grid x:Name="grid_revit" IsEnabled="{Binding IsChecked, ElementName=chk_revit}">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="170"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="24"/>
                                         <ColumnDefinition Width="170"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
@@ -646,26 +662,20 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Sheet number prefix"/>
-                                    <TextBox x:Name="tb_prefix" Grid.Row="0" Grid.Column="1"
-                                             ToolTip="Only used for NEW sheets, e.g. AM gives AM-01, AM-02..."/>
-                                    <TextBlock Grid.Row="0" Grid.Column="3" Style="{StaticResource FieldLabel}" Text="Title block"/>
-                                    <ComboBox x:Name="cmb_titleblock" Grid.Row="0" Grid.Column="4"/>
-                                    <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Max table height (mm)" Margin="0,6,0,0"/>
-                                    <TextBox x:Name="tb_page_h" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0"
-                                             ToolTip="Maximum table height per page. Type blocks are never split across pages."/>
-                                    <TextBlock Grid.Row="1" Grid.Column="3" Grid.ColumnSpan="2" Style="{StaticResource Hint}"
-                                               Margin="0,6,0,0" VerticalAlignment="Center"
-                                               Text="Text size and style: Appearance tab."/>
+                                    <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Max table height (mm)"/>
+                                    <TextBox x:Name="tb_page_h" Grid.Row="0" Grid.Column="1"
+                                             ToolTip="Maximum table height per view. Type blocks are never split across views."/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                               Text="Each view is one page of the table. Views are named '&lt;table name&gt; table N' and updated in place on the next run. Text size and style: Appearance tab."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+                        <Border Grid.Column="2" Style="{StaticResource Card}">
                             <StackPanel>
                                 <CheckBox x:Name="chk_excel" IsChecked="True" Margin="0,0,0,8"
                                           FontSize="13" FontWeight="SemiBold" Content="4 · Write to Excel"/>
-                                <Grid IsEnabled="{Binding IsChecked, ElementName=chk_excel}">
+                                <Grid x:Name="grid_excel" IsEnabled="{Binding IsChecked, ElementName=chk_excel}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170"/>
                                         <ColumnDefinition Width="*"/>
@@ -682,11 +692,11 @@
                                             Click="browse_click"/>
                                     <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
                                                Style="{StaticResource Hint}" Margin="0,4,0,0"
-                                               Text="The tab named above is cleared and rewritten; other tabs are untouched. The file is created if it does not exist. Requires desktop Excel."/>
+                                               Text="The tab named in Table name is cleared and rewritten; other tabs are untouched. The file is created if it does not exist. Requires desktop Excel."/>
                                 </Grid>
                             </StackPanel>
                         </Border>
-
+</Grid>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -711,6 +721,7 @@
                                 <Grid Margin="12,10,12,12">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
@@ -718,14 +729,23 @@
 
                                     <DockPanel Grid.Row="0" Margin="0,0,0,6">
                                         <Button DockPanel.Dock="Right" Content="Reset" Style="{StaticResource LinkButton}"
-                                                Click="fields_reset_click" VerticalAlignment="Center"/>
+                                                Click="fields_reset_click" VerticalAlignment="Center"
+                                                ToolTip="Restore the default fields. Custom fields are kept."/>
                                         <TextBlock x:Name="fields_count" DockPanel.Dock="Right" Style="{StaticResource Hint}"
                                                    Margin="0,0,12,0" VerticalAlignment="Center"/>
                                         <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Table fields"/>
                                     </DockPanel>
 
+                                    <!-- shown when saved fields are not in this project -->
+                                    <Border x:Name="missing_note" Grid.Row="1" Background="{StaticResource WarnBg}"
+                                            CornerRadius="4" Padding="8,5" Margin="0,0,0,6" Visibility="Collapsed">
+                                        <TextBlock x:Name="missing_note_text" TextWrapping="Wrap" FontSize="11"
+                                                   Foreground="{StaticResource WarnText}"
+                                                   Text="Some fields are not in this project and show #NOT_IN_PROJECT. Remove them with × or add the parameter again."/>
+                                    </Border>
+
                                     <!-- table fields: selectable list, with one icon column on the right -->
-                                    <Grid Grid.Row="1">
+                                    <Grid Grid.Row="2">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -757,7 +777,6 @@
                                         <!-- icon column: act on the selected table field -->
                                         <StackPanel Grid.Column="1" Margin="6,4,0,0">
 
-                                            <!-- UP (angle-up-svgrepo-com.svg) -->
                                             <Button x:Name="btn_field_up" Style="{StaticResource IconButton}"
                                                     Click="field_up_click" ToolTip="Move up" IsEnabled="False">
                                                 <Viewbox Width="16" Height="16">
@@ -768,7 +787,6 @@
                                                 </Viewbox>
                                             </Button>
 
-                                            <!-- DOWN (angle-down-svgrepo-com.svg) -->
                                             <Button x:Name="btn_field_down" Style="{StaticResource IconButton}"
                                                     Click="field_down_click" ToolTip="Move down" IsEnabled="False">
                                                 <Viewbox Width="16" Height="16">
@@ -779,12 +797,11 @@
                                                 </Viewbox>
                                             </Button>
 
-                                            <!-- REMOVE (cross-svgrepo-com.svg) -->
                                             <Button x:Name="btn_field_remove" Style="{StaticResource IconButton}"
                                                     Click="field_remove_click" ToolTip="Remove from table" IsEnabled="False">
                                                 <Viewbox Width="16" Height="16">
                                                     <Canvas Width="25" Height="25">
-                                                        <Path Fill="#9B1C1C"
+                                                        <Path Fill="{StaticResource ErrText}"
                                                               Data="M487.148,1053.48 L492.813,1047.82 C494.376,1046.26 494.376,1043.72 492.813,1042.16 C491.248,1040.59 488.712,1040.59 487.148,1042.16 L481.484,1047.82 L475.82,1042.16 C474.257,1040.59 471.721,1040.59 470.156,1042.16 C468.593,1043.72 468.593,1046.26 470.156,1047.82 L475.82,1053.48 L470.156,1059.15 C468.593,1060.71 468.593,1063.25 470.156,1064.81 C471.721,1066.38 474.257,1066.38 475.82,1064.81 L481.484,1059.15 L487.148,1064.81 C488.712,1066.38 491.248,1066.38 492.813,1064.81 C494.376,1063.25 494.376,1060.71 492.813,1059.15 L487.148,1053.48">
                                                             <Path.RenderTransform>
                                                                 <TranslateTransform X="-469" Y="-1041"/>
@@ -796,11 +813,11 @@
                                         </StackPanel>
                                     </Grid>
 
-                                    <GridSplitter Grid.Row="2" Height="2" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                                    <GridSplitter Grid.Row="3" Height="2" HorizontalAlignment="Stretch" VerticalAlignment="Center"
                                                   Background="{StaticResource LineSoft}" Cursor="SizeNS" Margin="0,4,0,4" ShowsPreview="True"/>
 
-                                    <!-- Add parameter section: list (left) + icon column (right) -->
-                                    <Grid Grid.Row="3">
+                                    <!-- Add parameter: list (left) + icon column (right) -->
+                                    <Grid Grid.Row="4">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
@@ -814,16 +831,15 @@
                                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource CardTitle}" Text="Add parameter"/>
 
                                         <TextBox Grid.Row="1" Grid.ColumnSpan="2" x:Name="tb_param_search"
-                                                TextChanged="param_search_changed"
-                                                ToolTip="Search the parameters found on this category"/>
+                                                 TextChanged="param_search_changed"
+                                                 ToolTip="Search the parameters found on this category"/>
 
-                                        <!-- selectable list (no buttons inside the rows any more) -->
                                         <ListBox x:Name="suggest_list" Grid.Row="2" Grid.Column="0" Margin="0,4,0,0"
-                                                Background="Transparent"
-                                                BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                                ItemContainerStyle="{StaticResource FmItem}"
-                                                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                                SelectionChanged="suggest_selection_changed">
+                                                 Background="Transparent"
+                                                 BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                                 ItemContainerStyle="{StaticResource FmItem}"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 SelectionChanged="suggest_selection_changed">
                                             <ListBox.ItemTemplate>
                                                 <DataTemplate>
                                                     <Grid>
@@ -832,7 +848,7 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
-                                                                TextTrimming="CharacterEllipsis"/>
+                                                                   TextTrimming="CharacterEllipsis"/>
                                                         <Border Grid.Column="1" Style="{StaticResource ChipInfo}">
                                                             <TextBlock Style="{StaticResource ChipText}" Text="{Binding ScopeText}"/>
                                                         </Border>
@@ -841,10 +857,9 @@
                                             </ListBox.ItemTemplate>
                                         </ListBox>
 
-                                        <!-- icon column: icons converted from add.svg / customfield.svg / edit.svg / delete.svg -->
                                         <StackPanel Grid.Row="2" Grid.Column="1" Margin="6,4,0,0">
 
-                                            <!-- ADD (add.svg, 16x16) -->
+                                            <!-- ADD -->
                                             <Button x:Name="btn_param_add" Style="{StaticResource IconButton}" Click="suggest_add_click"
                                                     ToolTip="Add the selected parameter to the table" IsEnabled="False">
                                                 <Canvas Width="16" Height="16">
@@ -856,12 +871,11 @@
                                                     <Rectangle Canvas.Left="5" Canvas.Top="10" Width="4" Height="1" Fill="#78909C"/>
                                                     <Ellipse Canvas.Left="8.5" Canvas.Top="8.5" Width="7" Height="7" Fill="#4CAF50"/>
                                                     <Path Data="M 12,10.5 L 12,13.5 M 10.5,12 L 13.5,12" Stroke="#FFFFFF" StrokeThickness="1.2"
-                                                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                                 </Canvas>
                                             </Button>
 
-                                            <!-- CUSTOM FIELD (customfield.svg, 64x64: the sigma only fills x 18-46, y 16-48,
-                                                so the canvas is cropped to 32x32 and shifted to fill the 16 px slot) -->
+                                            <!-- CUSTOM FIELD -->
                                             <Button x:Name="btn_param_custom" Style="{StaticResource IconButton}" Click="suggest_custom_click"
                                                     ToolTip="New custom field (calculated)">
                                                 <Viewbox Width="16" Height="16">
@@ -870,13 +884,13 @@
                                                             <TranslateTransform X="-16" Y="-16"/>
                                                         </Canvas.RenderTransform>
                                                         <Path Data="M 18,16 L 46,16 L 46,23 L 29,23 L 38,32 L 29,41 L 46,41 L 46,48 L 18,48 L 18,43 L 31,32 L 18,21 Z"
-                                                            Fill="#FFC107"/>
+                                                              Fill="#FFC107"/>
                                                         <Path Data="M 18,16 L 46,16 L 46,20 L 25,20 L 18,16 Z" Fill="#FFD54F"/>
                                                     </Canvas>
                                                 </Viewbox>
                                             </Button>
 
-                                            <!-- EDIT (edit.svg, 94x94 pencil rotated -45 degrees) -->
+                                            <!-- EDIT -->
                                             <Button x:Name="btn_param_edit" Style="{StaticResource IconButton}" Click="suggest_edit_click"
                                                     ToolTip="Edit the selected custom field" IsEnabled="False">
                                                 <Viewbox Width="16" Height="16">
@@ -909,21 +923,21 @@
                                                             <Path Data="M 42,78 L 47,88 L 52,78 Z" Fill="#616161"/>
                                                             <Path Data="M 37,66 L 42,78 L 52,78 L 57,66 Z" Fill="{StaticResource pencilWood}"/>
                                                             <Rectangle Canvas.Left="37" Canvas.Top="28" Width="20" Height="38" RadiusX="1" RadiusY="1"
-                                                                    Fill="{StaticResource pencilBody}"/>
+                                                                       Fill="{StaticResource pencilBody}"/>
                                                             <Rectangle Canvas.Left="37" Canvas.Top="16" Width="20" Height="12" RadiusX="1" RadiusY="1"
-                                                                    Fill="{StaticResource pencilFerrule}"/>
+                                                                       Fill="{StaticResource pencilFerrule}"/>
                                                             <Path Data="M 37,16 C 37,8 57,8 57,16 Z" Fill="{StaticResource pencilEraser}"/>
                                                         </Canvas>
                                                     </Canvas>
                                                 </Viewbox>
                                             </Button>
 
-                                            <!-- DELETE (trash-svgrepo-com.svg): enabled for custom fields only -->
+                                            <!-- DELETE: enabled for custom fields only -->
                                             <Button x:Name="btn_param_delete" Style="{StaticResource IconButton}" Click="suggest_delete_click"
                                                     ToolTip="Delete the selected custom field" IsEnabled="False">
                                                 <Viewbox Width="16" Height="16">
                                                     <Canvas Width="26" Height="32">
-                                                        <Path Fill="#9B1C1C"
+                                                        <Path Fill="{StaticResource ErrText}"
                                                               Data="M268,220 C268,219.448 268.448,219 269,219 C269.552,219 270,219.448 270,220 L270,232 C270,232.553 269.552,233 269,233 C268.448,233 268,232.553 268,232 L268,220 L268,220 Z M273,220 C273,219.448 273.448,219 274,219 C274.552,219 275,219.448 275,220 L275,232 C275,232.553 274.552,233 274,233 C273.448,233 273,232.553 273,232 L273,220 L273,220 Z M278,220 C278,219.448 278.448,219 279,219 C279.552,219 280,219.448 280,220 L280,232 C280,232.553 279.552,233 279,233 C278.448,233 278,232.553 278,232 L278,220 L278,220 Z M263,233 C263,235.209 264.791,237 267,237 L281,237 C283.209,237 285,235.209 285,233 L285,217 L263,217 L263,233 L263,233 Z M277,209 L271,209 L271,208 C271,207.447 271.448,207 272,207 L276,207 C276.552,207 277,207.447 277,208 L277,209 L277,209 Z M285,209 L279,209 L279,207 C279,205.896 278.104,205 277,205 L271,205 C269.896,205 269,205.896 269,207 L269,209 L263,209 C261.896,209 261,209.896 261,211 L261,213 C261,214.104 261.895,214.999 262.999,215 L285.002,215 C286.105,214.999 287,214.104 287,213 L287,211 C287,209.896 286.104,209 285,209 L285,209 Z">
                                                             <Path.RenderTransform>
                                                                 <TranslateTransform X="-261" Y="-205"/>
@@ -934,7 +948,6 @@
                                             </Button>
                                         </StackPanel>
                                     </Grid>
-
                                 </Grid>
                             </TabItem>
 
@@ -990,8 +1003,8 @@
                                                             <TextBox Grid.Row="1" Grid.Column="2" Width="110" Height="24" Margin="6,4,0,0"
                                                                      Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                                      Visibility="{Binding IsText, Converter={StaticResource B2V}}"/>
-                                                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource Hint}"
-                                                                       Foreground="{StaticResource WarnText}" Text="{Binding Error}"
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource WarnHint}"
+                                                                       Text="{Binding Error}"
                                                                        Visibility="{Binding HasError, Converter={StaticResource B2V}}"/>
                                                         </Grid>
                                                     </Border>
@@ -1004,12 +1017,12 @@
 
                                         <TextBlock x:Name="filter_status" Style="{StaticResource Hint}" Margin="0,10,0,0"/>
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
-                                                   Text="Filters run on the elements before they are grouped, so counts and totals only include matching elements. Lengths and areas are compared in m and m²."/>
+                                                   Text="Model-field conditions run on the elements before they are grouped, so counts and totals only include matching elements. Calculated-field conditions run after grouping, on the row values. Lengths and areas are compared in m and m²."/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
 
-                            <!-- Sort & group -->
+                            <!-- Sort &amp; group -->
                             <TabItem Header="Sort &amp; group" Style="{StaticResource LineTab}">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel Margin="12,10,12,12">
@@ -1041,109 +1054,129 @@
 
                             <!-- Formatting -->
                             <TabItem Header="Formatting" Style="{StaticResource LineTab}">
-                                <Grid Margin="12,10,12,12">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="190"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
+                                <DockPanel Margin="12,10,12,12">
 
-                                    <DockPanel Grid.Row="0" Margin="0,0,0,6">
-                                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource Hint}" VerticalAlignment="Center"
-                                                   Text="select one to format"/>
-                                        <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Fields"/>
-                                    </DockPanel>
-
-                                    <Border Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="3" Padding="2">
-                                        <ListBox x:Name="format_list" BorderThickness="0" Background="Transparent"
-                                                ItemContainerStyle="{StaticResource FmItem}"
-                                                SelectionChanged="format_selection_changed"
-                                                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                            <ListBox.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                                        <Border Grid.Column="1" Style="{StaticResource Chip}">
-                                                            <TextBlock Style="{StaticResource ChipText}" Text="{Binding AlignChip}"/>
-                                                        </Border>
-                                                        <Border Grid.Column="2" Style="{StaticResource ChipWarn}"
-                                                                Visibility="{Binding HiddenInRevit, Converter={StaticResource B2V}}">
-                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="hidden"/>
-                                                        </Border>
-                                                        <Border Grid.Column="3" Style="{StaticResource ChipWarn}"
-                                                                Visibility="{Binding NoExcel, Converter={StaticResource B2V}}">
-                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="no Excel"/>
-                                                        </Border>
-                                                        <Border Grid.Column="4" Style="{StaticResource ChipGood}"
-                                                                Visibility="{Binding HasCalc, Converter={StaticResource B2V}}">
-                                                            <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource GoodText}" Text="Σ"/>
-                                                        </Border>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ListBox.ItemTemplate>
-                                        </ListBox>
+                                    <!-- table-wide option: a numbering column, not a field -->
+                                    <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,8,0,0">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource CardTitle}" Text="Row numbers (whole table)"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <CheckBox x:Name="chk_rownum" Content="Add a numbering column"
+                                                        Margin="0,0,14,0" Click="rownum_changed"
+                                                        ToolTip="Numbers the visible data rows 1 to N, in the final order of the table."/>
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Heading" Margin="0,0,6,0"/>
+                                                <TextBox x:Name="tb_rownum_heading" Width="120" IsEnabled="{Binding IsChecked, ElementName=chk_rownum}"
+                                                        TextChanged="rownum_heading_changed"
+                                                        ToolTip="Heading of the numbering column"/>
+                                            </StackPanel>
+                                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                                    Text="Numbers visible data rows from 1. Header, footer, summary and blank rows get no number. Takes effect when the Excel and Revit outputs are written (not yet built, see Phase 12)."/>
+                                        </StackPanel>
                                     </Border>
+                                    <Grid Margin="12,10,12,12">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="190"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
 
-                                    <StackPanel x:Name="fmt_panel" Grid.Row="2" Margin="0,12,0,0" IsEnabled="False">
-                                        <TextBlock x:Name="fmt_title" Style="{StaticResource CardTitle}" Text="Select a field"/>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="130"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="34"/>
-                                                <RowDefinition Height="34"/>
-                                                <RowDefinition Height="34"/>
-                                                <RowDefinition Height="34"/>
-                                            </Grid.RowDefinitions>
+                                        <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                                            <TextBlock DockPanel.Dock="Right" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                                                    Text="select one to format"/>
+                                            <TextBlock Style="{StaticResource CardTitle}" Margin="0" Text="Fields"/>
+                                        </DockPanel>
 
-                                            <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Heading"/>
-                                            <TextBox x:Name="fmt_heading" Grid.Row="0" Grid.Column="1" TextChanged="fmt_heading_changed"/>
+                                        <Border Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="3" Padding="2">
+                                            <ListBox x:Name="format_list" BorderThickness="0" Background="Transparent"
+                                                    ItemContainerStyle="{StaticResource FmItem}"
+                                                    SelectionChanged="format_selection_changed"
+                                                    ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                            <Border Grid.Column="1" Style="{StaticResource Chip}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Text="{Binding AlignChip}"/>
+                                                            </Border>
+                                                            <Border Grid.Column="2" Style="{StaticResource ChipWarn}"
+                                                                    Visibility="{Binding HiddenInRevit, Converter={StaticResource B2V}}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="hidden"/>
+                                                            </Border>
+                                                            <Border Grid.Column="3" Style="{StaticResource ChipWarn}"
+                                                                    Visibility="{Binding NoExcel, Converter={StaticResource B2V}}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource WarnText}" Text="no Excel"/>
+                                                            </Border>
+                                                            <Border Grid.Column="4" Style="{StaticResource ChipGood}"
+                                                                    Visibility="{Binding HasCalc, Converter={StaticResource B2V}}">
+                                                                <TextBlock Style="{StaticResource ChipText}" Foreground="{StaticResource GoodText}" Text="Σ"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </Border>
 
-                                            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Alignment (data)"/>
-                                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <RadioButton x:Name="align_l" GroupName="align" Style="{StaticResource Seg}"
-                                                            Tag="left" Content="Left" IsChecked="True" Click="align_click"/>
-                                                <RadioButton x:Name="align_c" GroupName="align" Style="{StaticResource Seg}"
-                                                            Tag="center" Content="Center" Click="align_click"/>
-                                                <RadioButton x:Name="align_r" GroupName="align" Style="{StaticResource Seg}"
-                                                            Tag="right" Content="Right" Click="align_click"/>
-                                            </StackPanel>
+                                        <StackPanel x:Name="fmt_panel" Grid.Row="2" Margin="0,12,0,0" IsEnabled="False">
+                                            <TextBlock x:Name="fmt_title" Style="{StaticResource CardTitle}" Text="Select a field"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="130"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="34"/>
+                                                    <RowDefinition Height="34"/>
+                                                    <RowDefinition Height="34"/>
+                                                    <RowDefinition Height="34"/>
+                                                </Grid.RowDefinitions>
 
-                                            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Column width (Revit)"/>
-                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <TextBox x:Name="fmt_width" Width="56" TextChanged="fmt_width_changed"
-                                                        ToolTip="Column width on the sheet, in mm"/>
-                                                <TextBlock Style="{StaticResource Hint}" Margin="6,0,10,0" VerticalAlignment="Center" Text="mm"/>
-                                                <CheckBox x:Name="fmt_auto" Content="Auto" IsChecked="True" Click="fmt_auto_click"/>
-                                            </StackPanel>
+                                                <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Heading"/>
+                                                <TextBox x:Name="fmt_heading" Grid.Row="0" Grid.Column="1" TextChanged="fmt_heading_changed"/>
 
-                                            <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Calculation"/>
-                                            <ComboBox x:Name="fmt_calc" Grid.Row="3" Grid.Column="1" SelectedIndex="0"
-                                                    SelectionChanged="fmt_calc_changed">
-                                                <ComboBoxItem Tag="none" Content="None"/>
-                                                <ComboBoxItem Tag="total" Content="Calculate totals"/>
-                                                <ComboBoxItem Tag="min" Content="Minimum"/>
-                                                <ComboBoxItem Tag="max" Content="Maximum"/>
-                                                <ComboBoxItem Tag="minmax" Content="Minimum and maximum"/>
-                                            </ComboBox>
-                                        </Grid>
+                                                <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Alignment (data)"/>
+                                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <RadioButton x:Name="align_l" GroupName="align" Style="{StaticResource Seg}"
+                                                                Tag="left" Content="Left" IsChecked="True" Click="align_click"/>
+                                                    <RadioButton x:Name="align_c" GroupName="align" Style="{StaticResource Seg}"
+                                                                Tag="center" Content="Center" Click="align_click"/>
+                                                    <RadioButton x:Name="align_r" GroupName="align" Style="{StaticResource Seg}"
+                                                                Tag="right" Content="Right" Click="align_click"/>
+                                                </StackPanel>
 
-                                        <Separator Margin="0,6,0,6" Background="{StaticResource LineSoft}"/>
-                                        <CheckBox x:Name="fmt_hidden" Content="Hidden field (Revit)" Margin="0,0,0,6" Click="fmt_flag_click"/>
-                                        <CheckBox x:Name="fmt_excel" Content="Show in Excel" IsChecked="True" Click="fmt_flag_click"/>
-                                        <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
-                                                   Text="Hidden field leaves the column out of the Revit table. Show in Excel decides whether it is written to the workbook. A column hidden in Revit but off in Excel is still available for sorting."/>
-                                    </StackPanel>
-                                </Grid>
+                                                <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Column width (Revit)"/>
+                                                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBox x:Name="fmt_width" Width="56" TextChanged="fmt_width_changed"
+                                                            ToolTip="Column width on the sheet, in mm"/>
+                                                    <TextBlock Style="{StaticResource Hint}" Margin="6,0,10,0" VerticalAlignment="Center" Text="mm"/>
+                                                    <CheckBox x:Name="fmt_auto" Content="Auto" IsChecked="True" Click="fmt_auto_click"/>
+                                                </StackPanel>
+
+                                                <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Calculation"/>
+                                                <ComboBox x:Name="fmt_calc" Grid.Row="3" Grid.Column="1" SelectedIndex="0"
+                                                        SelectionChanged="fmt_calc_changed">
+                                                    <ComboBoxItem Tag="none" Content="None"/>
+                                                    <ComboBoxItem Tag="total" Content="Calculate totals"/>
+                                                    <ComboBoxItem Tag="min" Content="Minimum"/>
+                                                    <ComboBoxItem Tag="max" Content="Maximum"/>
+                                                    <ComboBoxItem Tag="minmax" Content="Minimum and maximum"/>
+                                                </ComboBox>
+                                            </Grid>
+
+                                            <Separator Margin="0,6,0,6" Background="{StaticResource LineSoft}"/>
+                                            <CheckBox x:Name="fmt_hidden" Content="Hidden field (Revit)" Margin="0,0,0,6" Click="fmt_flag_click"/>
+                                            <CheckBox x:Name="fmt_excel" Content="Show in Excel" IsChecked="True" Click="fmt_flag_click"/>
+                                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                                    Text="Hidden field leaves the column out of the Revit table. Show in Excel decides whether it is written to the workbook. A column hidden in Revit but off in Excel is still available for sorting."/>
+                                        </StackPanel>
+                                    </Grid>
+                                </DockPanel>
                             </TabItem>
 
                             <!-- Appearance -->
@@ -1178,19 +1211,19 @@
 
                                             <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Font"/>
                                             <ComboBox x:Name="cmb_font" Grid.Row="1" Grid.Column="1" Width="220" HorizontalAlignment="Left"
-                                                    SelectionChanged="font_changed"/>
+                                                      SelectionChanged="font_changed"/>
 
                                             <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Font size (mm)"/>
                                             <TextBox x:Name="tb_font_mm" Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left"
-                                                    TextChanged="font_size_changed" ToolTip="Text height in mm (Revit's unit)"/>
+                                                     TextChanged="font_size_changed" ToolTip="Text height in mm (Revit's unit)"/>
 
                                             <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="Wrap text"/>
                                             <CheckBox x:Name="chk_wrap" Grid.Row="3" Grid.Column="1" Content="Wrap text in all cells"
-                                                    Click="app_check_click"/>
+                                                      Click="app_check_click"/>
 
                                             <TextBlock Grid.Row="4" Style="{StaticResource FieldLabel}" Text="Blank row (Revit, mm)"/>
                                             <TextBox x:Name="tb_blank_mm" Grid.Row="4" Grid.Column="1" Width="70" HorizontalAlignment="Left"
-                                                    TextChanged="blank_changed"/>
+                                                     TextChanged="blank_changed"/>
                                         </Grid>
 
                                         <TextBlock Style="{StaticResource CardTitle}" Text="Elements"/>
@@ -1218,7 +1251,7 @@
                                         <CheckBox x:Name="chk_gridlines" Content="Show gridlines" Click="app_check_click"/>
 
                                         <TextBlock Style="{StaticResource Hint}" Margin="0,12,0,0"
-                                                  Text="Data rows take their alignment from each field in Formatting. Revit does not draw text colour; Excel and the preview do. Revit draws backgrounds, zebra striping and line colour."/>
+                                                   Text="Data rows take their alignment from each field in Formatting. Revit does not draw text colour; Excel and the preview do. Revit draws backgrounds, zebra striping and line colour."/>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
@@ -1235,7 +1268,8 @@
 
                         <DockPanel Grid.Row="0" Margin="0,0,0,8">
                             <Button DockPanel.Dock="Right" Content="Re-read model" Style="{StaticResource SecondaryButton}"
-                                    Padding="12,4" Click="reread_click"/>
+                                    Padding="12,4" Click="reread_click"
+                                    ToolTip="Read the model again. Needed only after the model has changed."/>
                             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,12,0">
                                 <RadioButton x:Name="view_excel" GroupName="view" Style="{StaticResource Seg}"
                                              Content="As Excel" IsChecked="True" Checked="view_changed"/>
@@ -1251,9 +1285,9 @@
                                 BorderBrush="{StaticResource Line}" BorderThickness="1">
                             <DockPanel>
                                 <TextBlock x:Name="preview_title" DockPanel.Dock="Top" TextAlignment="Center"
-                                        TextWrapping="Wrap" Margin="8,8,8,6" Foreground="#1B1E23"/>
+                                           TextWrapping="Wrap" Margin="8,8,8,6" Foreground="#1B1E23"/>
                                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                            Background="#FFFFFF">
+                                              Background="#FFFFFF">
                                     <Grid x:Name="excel_grid" Background="#FFFFFF" Margin="8,0,8,8"/>
                                 </ScrollViewer>
                             </DockPanel>
@@ -1266,6 +1300,10 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
                             <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+                                <Border x:Name="revit_size_chip" Style="{StaticResource ChipWarn}" Margin="0,0,8,0" Visibility="Collapsed">
+                                    <TextBlock x:Name="revit_size_note" Style="{StaticResource ChipText}"
+                                               Foreground="{StaticResource ErrText}" FontWeight="SemiBold" Text=""/>
+                                </Border>
                                 <Border Style="{StaticResource ChipWarn}" Margin="0,0,8,0">
                                     <TextBlock x:Name="revit_hidden_note" Style="{StaticResource ChipText}"
                                                Foreground="{StaticResource WarnText}" Text="Hidden in Revit: none"/>
@@ -1275,8 +1313,7 @@
                                                Foreground="{StaticResource GoodText}" Text="No calculations"/>
                                 </Border>
                                 <Border Style="{StaticResource Chip}" Margin="0">
-                                    <TextBlock x:Name="revit_scale_note" Style="{StaticResource ChipText}"
-                                               Text="Preview scale: 1 mm on sheet = 3.6 px"/>
+                                    <TextBlock x:Name="revit_scale_note" Style="{StaticResource ChipText}" Text=""/>
                                 </Border>
                             </WrapPanel>
                             <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
@@ -1297,21 +1334,33 @@
             </TabItem>
         </TabControl>
 
+        <!-- store status: shown when the saved-settings file was blocked or moved aside -->
+        <Border x:Name="store_note" Grid.Row="2" Background="{StaticResource WarnBg}" CornerRadius="4"
+                Padding="10,6" Margin="0,0,0,8" Visibility="Collapsed">
+            <TextBlock x:Name="store_note_text" TextWrapping="Wrap" Foreground="{StaticResource WarnText}" Text=""/>
+        </Border>
+
         <!-- log -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,10,0,10" Padding="8">
+        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,10" Padding="8">
             <TextBox x:Name="log_box" Height="96" IsReadOnly="True" BorderThickness="0"
                      FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
         </Border>
 
-        <!-- buttons -->
-        <DockPanel Grid.Row="3" LastChildFill="False">
+        <!-- footer: status on the left; Save settings, Run and Close on the right -->
+        <DockPanel Grid.Row="4" LastChildFill="False">
             <TextBlock x:Name="status_text" DockPanel.Dock="Left" Style="{StaticResource Hint}"
                        VerticalAlignment="Center" Text="Ready"/>
             <Button x:Name="btn_close" DockPanel.Dock="Right" Content="Close" Margin="8,0,0,0"
                     Style="{StaticResource SecondaryButton}" Padding="16,7" Click="close_click"/>
-            <Button x:Name="btn_run" DockPanel.Dock="Right" Content="Run"
+            <Button x:Name="btn_run" DockPanel.Dock="Right" Content="Run" Margin="8,0,0,0"
                     Style="{StaticResource PrimaryButton}" Click="run_click"/>
+            <TextBlock x:Name="txt_unsaved" DockPanel.Dock="Right" Margin="0,0,12,0" VerticalAlignment="Center"
+                       Foreground="{StaticResource WarnText}" FontSize="11" FontWeight="SemiBold"
+                       Text="Unsaved changes" Visibility="Collapsed"/>
+            <Button x:Name="btn_save" DockPanel.Dock="Right" Content="Save settings"
+                    Style="{StaticResource SecondaryButton}" Padding="16,7" Click="save_click"
+                    ToolTip="Save the settings of this category and table type to tables.json"/>
         </DockPanel>
     </Grid>
 </Window>

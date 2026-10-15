@@ -283,7 +283,7 @@ class EditState(object):
         rows = []
         for st in self.settings["fields"]:
             key = st["key"]
-            lab = self.label(key) if self.rs.field(key) is not None else u"%s (not found)" % (st.get("heading") or key)
+            lab = self.label(key) if self.rs.field(key) is not None else u"%s (not in this project)" % (st.get("heading") or key)
             rows.append(FieldRow(key, lab, True, self._scope_text(key), on_change))
         return rows
 

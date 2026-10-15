@@ -1,0 +1,4 @@
+title: "Phase 9\ncheck"
+tooltip: "Temporary dev button: tests saved settings (round trip, restore, corrupt and newer files). Writes to a temp folder only. Run in a test copy of the project."
+author: "Abaco"
+min_revit_version: 2024

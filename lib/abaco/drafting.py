@@ -197,7 +197,13 @@ def _draw(doc, view, page, types, thin, app, caches):
         raise Exception("drafting step '%s' failed at line %s: %s" % (step[0], line, ex))
 
 
-def build_tables(doc, layout, sheet_name, number_prefix, title_block=None):
+def build_tables(doc, layout, view_name, number_prefix=None, title_block=None):
+    """Creates or updates one drafting view per page of the layout. No sheets and no viewports.
+
+    Views are named '<view_name> table N'. Running again updates the views with that name in place.
+    Views left over from a longer table are emptied and reported. number_prefix and title_block are
+    accepted for compatibility with older callers and are ignored.
+    """
     report = []
     app = layout.appearance
     types = dict((el, _text_type(doc, app, el)) for el in ELEMENTS)
@@ -214,23 +220,13 @@ def build_tables(doc, layout, sheet_name, number_prefix, title_block=None):
         raise Exception("No drafting view type in the project")
 
     view_names = set(v.Name for v in DB.FilteredElementCollector(doc).OfClass(DB.View))
-    sheet_numbers = set(s.SheetNumber for s in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet))
 
-    if title_block is not None:
-        if not title_block.IsActive:
-            title_block.Activate()
-            doc.Regenerate()
-        tb_id = title_block.Id
-    else:
-        tb_id = DB.ElementId.InvalidElementId
-
-    pat = re.compile(u"^" + re.escape(sheet_name) + r" table (\d+)$")
+    pat = re.compile(u"^" + re.escape(view_name) + r" table (\d+)$")
     existing = {}
     for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewDrafting):
         m = pat.match(v.Name)
         if m:
             existing[int(m.group(1))] = v
-    first_run = not existing
 
     total = len(layout.pages)
     for pi, page in enumerate(layout.pages):
@@ -239,30 +235,19 @@ def build_tables(doc, layout, sheet_name, number_prefix, title_block=None):
             view = existing[n]
             _clear_view(doc, view)
             _draw(doc, view, page, types, thin, app, caches)
-            report.append(u"UPDATED view '%s' (%d rows). Its sheet placement is unchanged." % (view.Name, page.nrows))
+            report.append(u"UPDATED view '%s' (%d rows)." % (view.Name, page.nrows))
             continue
         view = DB.ViewDrafting.Create(doc, vft.Id)
-        view.Name = _unique(u"%s table %d" % (sheet_name, n), view_names)
+        view.Name = _unique(u"%s table %d" % (view_name, n), view_names)
         view_names.add(view.Name)
         view.Scale = 1
         _draw(doc, view, page, types, thin, app, caches)
-        if first_run:
-            sheet = DB.ViewSheet.Create(doc, tb_id)
-            num = _unique(u"%s-%02d" % (number_prefix, n), sheet_numbers)
-            sheet_numbers.add(num)
-            sheet.SheetNumber = num
-            sheet.Name = u"%s (%d/%d)" % (sheet_name, n, total)
-            DB.Viewport.Create(doc, sheet.Id, view.Id,
-                               DB.XYZ((20 + layout.table_w / 2.0) * MM,
-                                      (20 + page.height / 2.0 + layout.row_h) * MM, 0))
-            report.append(u"CREATED sheet %s with view '%s' (%d rows)" % (num, view.Name, page.nrows))
-        else:
-            report.append(u"NEW PAGE: view '%s' created because the table grew. Place it on a sheet." % view.Name)
+        report.append(u"CREATED view '%s' (%d rows)." % (view.Name, page.nrows))
 
     for n, view in sorted(existing.items()):
         if n > total:
             _clear_view(doc, view)
-            report.append(u"EMPTY: view '%s' is no longer needed. Remove it from its sheet if you like." % view.Name)
-    
+            report.append(u"EMPTY: view '%s' is no longer needed. Delete it if you like." % view.Name)
+
     report.extend(NOTES)
     return report

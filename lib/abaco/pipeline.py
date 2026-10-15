@@ -48,8 +48,9 @@ ROW_GTOTAL, ROW_GMIN, ROW_GMAX = "gtotal", "gmin", "gmax"
 CALC_ROW_KINDS = (ROW_TOTAL, ROW_MIN, ROW_MAX, ROW_GTOTAL, ROW_GMIN, ROW_GMAX)
 ROW_BLANK, ROW_HEADER = "blank", "header"
 ROW_SUMHEAD = "sumhead"                 # "Summary" header row at the bottom of the table
+MARK_NOT_IN_PROJECT = u"#NOT_IN_PROJECT"
 
-_MARKERS = (u"#NONE", u"#ERROR", u"#TRUE", u"#FALSE")
+_MARKERS = (u"#NONE", u"#ERROR", u"#TRUE", u"#FALSE", MARK_NOT_IN_PROJECT)
 _KIND_EL = {ROW_DATA: "data", ROW_HEADER: "header", ROW_SUMHEAD: "summaryHeader",
             ROW_TOTAL: "summary", ROW_MIN: "summary", ROW_MAX: "summary",
             ROW_GTOTAL: "summary", ROW_GMIN: "summary", ROW_GMAX: "summary"}
@@ -116,6 +117,7 @@ def default_settings(rs, table_type="schedule", title=u"", custom=None):
     return {"category": rs.category_id, "tableType": ttype, "title": title, "fields": fields,
             "levels": levels, "grandTotals": False, "itemize": False, "labels": dict(DEFAULT_LABELS),
             "appearance": AP.preset("bw"),
+            "rowNumbers": {"on": False, "heading": u"No."},
             "custom": [dict(d) for d in (custom or []) if isinstance(d, dict)]}
 
 
@@ -367,7 +369,11 @@ def select_columns(rs, settings, ttype=None):
             continue
         f = rs.field(st["key"])
         if f is None:
-            warns.append(u"Field '%s' not found in this project: skipped." % (st.get("heading") or st["key"]))
+            label = st.get("heading") or st["key"]
+            stub = Field(st["key"], label, "element", "text")
+            cols.append(ColumnSpec(stub, _fill(st), rs))
+            warns.append(u"'%s' is not in this project: its column shows %s. Remove it with x, "
+                         u"or add the parameter again." % (label, MARK_NOT_IN_PROJECT))
             continue
         if f.scope == "layer" and ttype != "takeoff":
             warns.append(u"'%s' is a layer field, only available in a Material takeoff: skipped." % f.label)
@@ -867,6 +873,12 @@ def build_table(rs, settings):
     warns = warns + c_warns + apply_formulas(rs, rows, customs, f_order, labels)
     rows = filters.apply_row_filters(rs, rows, settings.get("filter"), set(c.key for c in cols))
     blocks = build_blocks(rows, levels, cols, labels, itemize, expanded, bool(settings.get("grandTotals")))
+    missing = [c.key for c in cols if rs.field(c.key) is None]
+    for k in missing:
+        for block in blocks:
+            for r in block:
+                if r.kind == ROW_DATA:
+                    r.cells[k] = MARK_NOT_IN_PROJECT
     blocks = format_cells(blocks, labels)
 
     if itemize and expanded and len(rows) > 500:
